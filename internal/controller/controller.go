@@ -21,11 +21,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"kardinal.dev/kardinal-operator/kardinal/resources"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 type Reconciler struct {
@@ -40,11 +38,6 @@ type Reconciler struct {
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
-
-	err := resources.Reconcile()
-	if err != nil {
-		return reconcile.Result{}, err
-	}
 
 	return ctrl.Result{}, nil
 }

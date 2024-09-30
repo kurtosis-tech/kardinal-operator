@@ -36,7 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	corev1 "kardinal.dev/kardinal-operator/api/core/v1"
-	"kardinal.dev/kardinal-operator/internal/controller"
+	kardinalcore "kardinal.dev/kardinal-operator/internal/controller/core"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -143,11 +143,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.Reconciler{
+	if err = (&kardinalcore.FlowReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Service")
+		setupLog.Error(err, "unable to create flow controller", "controller", "Flow")
 		os.Exit(1)
 	}
 
