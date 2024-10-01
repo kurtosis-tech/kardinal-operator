@@ -25,7 +25,7 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 	}
 
 	// Update base cluster topology with flows
-	patches := []topology.ServicePatch{}
+	patches := []*topology.ServicePatch{}
 	for _, flow := range namespace.Flows.Items {
 		logrus.Infof("Processing flow %s", flow.Name)
 		service, err := baseClusterTopology.GetService(flow.Spec.Service)
@@ -34,7 +34,7 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 		}
 		deployment := resources.GetDeploymentFromName(service.ServiceID, namespace.Deployments)
 		deployment.Spec.Template.Spec.Containers[0].Image = flow.Spec.Image
-		patch := topology.ServicePatch{
+		patch := &topology.ServicePatch{
 			Service:        flow.Spec.Service,
 			DeploymentSpec: &deployment.Spec,
 		}

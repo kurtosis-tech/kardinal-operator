@@ -17,11 +17,11 @@ import (
 )
 
 type ClusterTopology struct {
-	FlowID              string              `json:"flowID"`
-	Ingress             *Ingress            `json:"ingress"`
-	Services            []*Service          `json:"services"`
-	ServiceDependencies []ServiceDependency `json:"serviceDependencies"`
-	Namespace           string              `json:"namespace"`
+	FlowID              string               `json:"flowID"`
+	Ingress             *Ingress             `json:"ingress"`
+	Services            []*Service           `json:"services"`
+	ServiceDependencies []*ServiceDependency `json:"serviceDependencies"`
+	Namespace           string               `json:"namespace"`
 }
 
 func (clusterTopology *ClusterTopology) GetService(serviceName string) (*Service, error) {
@@ -167,28 +167,18 @@ type ServiceDependency struct {
 }
 
 type Ingress struct {
-	ActiveFlowIDs []string      `json:"activeFlowIDs"`
-	Ingresses     []net.Ingress `json:"ingresses"`
+	ActiveFlowIDs []string       `json:"activeFlowIDs"`
+	Ingresses     []*net.Ingress `json:"ingresses"`
 }
 
 type FlowPatch struct {
 	FlowId         string
-	ServicePatches []ServicePatch
-}
-
-type FlowPatchSpec struct {
-	FlowId         string
-	ServicePatches []ServicePatchSpec
+	ServicePatches []*ServicePatch
 }
 
 type ServicePatch struct {
 	Service        string
 	DeploymentSpec *appsv1.DeploymentSpec
-}
-
-type ServicePatchSpec struct {
-	Service string
-	Image   string
 }
 
 func NewClusterTopologyFromResources(
@@ -215,10 +205,10 @@ func NewClusterTopologyFromResources(
 	return &clusterTopology, nil
 }
 
-func processServices(services *corev1.ServiceList, deployments *appsv1.DeploymentList, version string) ([]*Service, []ServiceDependency, error) {
+func processServices(services *corev1.ServiceList, deployments *appsv1.DeploymentList, version string) ([]*Service, []*ServiceDependency, error) {
 	clusterTopologyServices := []*Service{}
-	clusterTopologyServiceDependencies := []ServiceDependency{}
-	externalServicesDependencies := []ServiceDependency{}
+	clusterTopologyServiceDependencies := []*ServiceDependency{}
+	externalServicesDependencies := []*ServiceDependency{}
 
 	type serviceWithDependenciesAnnotation struct {
 		service                *Service
@@ -256,7 +246,7 @@ func processServices(services *corev1.ServiceList, deployments *appsv1.Deploymen
 				return nil, nil, stacktrace.Propagate(err, "An error occurred finding the service dependency for service %s and port %s", serviceAndPortParts[0], serviceAndPortParts[1])
 			}
 
-			serviceDependency := ServiceDependency{
+			serviceDependency := &ServiceDependency{
 				Service:          svcWithDependenciesAnnotation.service,
 				DependsOnService: depService,
 				DependencyPort:   depServicePort,
