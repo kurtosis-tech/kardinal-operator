@@ -26,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	corev1 "kardinal.dev/kardinal-operator/api/core/v1"
-	"kardinal.dev/kardinal-operator/kardinal/resources"
+	"kardinal.dev/kardinal-operator/kardinal/reconciler"
 )
 
 // FlowReconciler reconciles a Flow object
@@ -53,7 +53,7 @@ type FlowReconciler struct {
 func (r *FlowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
 
-	err := resources.Reconcile(ctx, r.Client)
+	err := reconciler.Reconcile(ctx, r.Client)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
