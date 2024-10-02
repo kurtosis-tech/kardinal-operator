@@ -166,6 +166,36 @@ func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment
 	return &deployment
 }
 
+func NewServiceFromServiceAndDeployment(coreV1Service *corev1.Service, deployment *appsv1.Deployment, version string) *Service {
+	serviceAnnotations := coreV1Service.Annotations
+	namespace := coreV1Service.Namespace
+
+	clusterTopologyService := &Service{
+		ServiceID:      coreV1Service.Name,
+		Namespace:      namespace,
+		Version:        version,
+		ServiceSpec:    &coreV1Service.Spec,
+		DeploymentSpec: &deployment.Spec,
+	}
+	isStateful, ok := serviceAnnotations["kardinal.dev.service/stateful"]
+	if ok && isStateful == "true" {
+		clusterTopologyService.IsStateful = true
+	}
+	isExternal, ok := serviceAnnotations["kardinal.dev.service/external"]
+	if ok && isExternal == "true" {
+		clusterTopologyService.IsExternal = true
+	}
+	isShared, ok := serviceAnnotations["kardinal.dev.service/shared"]
+	if ok && isShared == "true" {
+		clusterTopologyService.IsShared = true
+	}
+	isManaged, ok := serviceAnnotations["kardinal.dev/managed"]
+	if ok && isManaged == "true" {
+		clusterTopologyService.IsManaged = true
+	}
+	return clusterTopologyService
+}
+
 type ServiceHash string
 
 // Hash generates a hash for the Service struct
@@ -259,7 +289,7 @@ func processServices(services []*corev1.Service, deployments []*appsv1.Deploymen
 		// 1- Service
 		serviceName := service.GetObjectMeta().GetName()
 		deployment := resources.GetDeploymentFromName(serviceName, deployments)
-		clusterTopologyService := newClusterTopologyServiceFromServiceAndDeployment(service, deployment, version)
+		clusterTopologyService := NewServiceFromServiceAndDeployment(service, deployment, version)
 
 		// 2- Service dependencies (creates a list of services with dependencies)
 		dependencies, ok := serviceAnnotations["kardinal.dev.service/dependencies"]
@@ -295,36 +325,6 @@ func processServices(services []*corev1.Service, deployments []*appsv1.Deploymen
 	clusterTopologyServiceDependencies = append(clusterTopologyServiceDependencies, externalServicesDependencies...)
 
 	return clusterTopologyServices, clusterTopologyServiceDependencies, nil
-}
-
-func newClusterTopologyServiceFromServiceAndDeployment(service *corev1.Service, deployment *appsv1.Deployment, version string) *Service {
-	serviceAnnotations := service.GetObjectMeta().GetAnnotations()
-	namespace := service.GetObjectMeta().GetNamespace()
-
-	clusterTopologyService := &Service{
-		ServiceID:      service.GetObjectMeta().GetName(),
-		Namespace:      namespace,
-		Version:        version,
-		ServiceSpec:    &service.Spec,
-		DeploymentSpec: &deployment.Spec,
-	}
-	isStateful, ok := serviceAnnotations["kardinal.dev.service/stateful"]
-	if ok && isStateful == "true" {
-		clusterTopologyService.IsStateful = true
-	}
-	isExternal, ok := serviceAnnotations["kardinal.dev.service/external"]
-	if ok && isExternal == "true" {
-		clusterTopologyService.IsExternal = true
-	}
-	isShared, ok := serviceAnnotations["kardinal.dev.service/shared"]
-	if ok && isShared == "true" {
-		clusterTopologyService.IsShared = true
-	}
-	isManaged, ok := serviceAnnotations["kardinal.dev/managed"]
-	if ok && isManaged == "true" {
-		clusterTopologyService.IsManaged = true
-	}
-	return clusterTopologyService
 }
 
 func getServiceAndPortFromClusterTopologyServices(serviceName string, servicePortName string, clusterTopologyServices []*Service) (*Service, *corev1.ServicePort, error) {
