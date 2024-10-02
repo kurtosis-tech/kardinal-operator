@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/kurtosis-tech/stacktrace"
-	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	net "k8s.io/api/networking/v1"
@@ -46,14 +45,37 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(flowPatch *FlowPatch) err
 		modifiedTargetService := DeepCopyService(targetService)
 		modifiedTargetService.DeploymentSpec = servicePatch.DeploymentSpec
 		modifiedTargetService.Version = flowID
+		modifiedTargetService.IsManaged = true
 		clusterTopology.Services = append(clusterTopology.Services, modifiedTargetService)
 	}
 
 	return nil
 }
 
+func (clusterTopology *ClusterTopology) GetResources() (map[string]*resources.Namespace, error) {
+	namespaces := map[string]*resources.Namespace{}
+	for _, service := range clusterTopology.Services {
+		if service.IsManaged {
+			namespace, found := namespaces[service.Namespace]
+			if !found {
+				namespaces[service.Namespace] = &resources.Namespace{
+					Name:        service.Namespace,
+					Services:    []*corev1.Service{},
+					Deployments: []*appsv1.Deployment{},
+				}
+				namespace = namespaces[service.Namespace]
+			}
+			namespace.Services = append(namespace.Services, service.GetCoreV1Service(service.Namespace))
+			namespace.Deployments = append(namespace.Deployments, service.GetAppsV1Deployment(service.Namespace))
+		}
+	}
+
+	return namespaces, nil
+}
+
 type Service struct {
 	ServiceID               string                 `json:"serviceID"`
+	Namespace               string                 `json:"namespace"`
 	Version                 string                 `json:"version"`
 	ServiceSpec             *corev1.ServiceSpec    `json:"serviceSpec"`
 	DeploymentSpec          *appsv1.DeploymentSpec `json:"deploymentSpec"`
@@ -61,9 +83,14 @@ type Service struct {
 	IsStateful              bool                   `json:"isStateful"`
 	IsShared                bool                   `json:"isShared"`
 	OriginalVersionIfShared string                 `json:"originalVersionIfShared"`
+	IsManaged               bool                   `json:"isManaged"`
 }
 
 func (service *Service) GetCoreV1Service(namespace string) *corev1.Service {
+	kardinalManaged := "false"
+	if service.Version != namespace {
+		kardinalManaged = "true"
+	}
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
@@ -75,12 +102,19 @@ func (service *Service) GetCoreV1Service(namespace string) *corev1.Service {
 			Labels: map[string]string{
 				"app": service.ServiceID,
 			},
+			Annotations: map[string]string{
+				"kardinal.dev/managed": kardinalManaged,
+			},
 		},
 		Spec: *service.ServiceSpec,
 	}
 }
 
 func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment {
+	kardinalManaged := "false"
+	if service.Version != namespace {
+		kardinalManaged = "true"
+	}
 	deployment := appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "apps/v1",
@@ -92,6 +126,9 @@ func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment
 			Labels: map[string]string{
 				"app":     service.ServiceID,
 				"version": service.Version,
+			},
+			Annotations: map[string]string{
+				"kardinal.dev/managed": kardinalManaged,
 			},
 		},
 		Spec: *service.DeploymentSpec,
@@ -182,8 +219,8 @@ type ServicePatch struct {
 }
 
 func NewClusterTopologyFromResources(
-	services *corev1.ServiceList,
-	deployments *appsv1.DeploymentList,
+	services []*corev1.Service,
+	deployments []*appsv1.Deployment,
 	namespace string,
 	version string,
 ) (*ClusterTopology, error) {
@@ -205,7 +242,7 @@ func NewClusterTopologyFromResources(
 	return &clusterTopology, nil
 }
 
-func processServices(services *corev1.ServiceList, deployments *appsv1.DeploymentList, version string) ([]*Service, []*ServiceDependency, error) {
+func processServices(services []*corev1.Service, deployments []*appsv1.Deployment, version string) ([]*Service, []*ServiceDependency, error) {
 	clusterTopologyServices := []*Service{}
 	clusterTopologyServiceDependencies := []*ServiceDependency{}
 	externalServicesDependencies := []*ServiceDependency{}
@@ -216,22 +253,21 @@ func processServices(services *corev1.ServiceList, deployments *appsv1.Deploymen
 	}
 	serviceWithDependencies := []*serviceWithDependenciesAnnotation{}
 
-	for _, service := range services.Items {
+	for _, service := range services {
 		serviceAnnotations := service.GetObjectMeta().GetAnnotations()
 
 		// 1- Service
-		logrus.Infof("Processing service: %v", service.GetObjectMeta().GetName())
 		serviceName := service.GetObjectMeta().GetName()
 		deployment := resources.GetDeploymentFromName(serviceName, deployments)
-		clusterTopologyService := newClusterTopologyServiceFromServiceAndDeployment(&service, deployment, version)
+		clusterTopologyService := newClusterTopologyServiceFromServiceAndDeployment(service, deployment, version)
 
 		// 2- Service dependencies (creates a list of services with dependencies)
 		dependencies, ok := serviceAnnotations["kardinal.dev.service/dependencies"]
 		if ok {
-			newServiceWithDependenciesAnnotation := &serviceWithDependenciesAnnotation{&clusterTopologyService, dependencies}
+			newServiceWithDependenciesAnnotation := &serviceWithDependenciesAnnotation{clusterTopologyService, dependencies}
 			serviceWithDependencies = append(serviceWithDependencies, newServiceWithDependenciesAnnotation)
 		}
-		clusterTopologyServices = append(clusterTopologyServices, &clusterTopologyService)
+		clusterTopologyServices = append(clusterTopologyServices, clusterTopologyService)
 	}
 
 	// Set the service dependencies in the clusterTopologyService
@@ -261,11 +297,13 @@ func processServices(services *corev1.ServiceList, deployments *appsv1.Deploymen
 	return clusterTopologyServices, clusterTopologyServiceDependencies, nil
 }
 
-func newClusterTopologyServiceFromServiceAndDeployment(service *corev1.Service, deployment *appsv1.Deployment, version string) Service {
+func newClusterTopologyServiceFromServiceAndDeployment(service *corev1.Service, deployment *appsv1.Deployment, version string) *Service {
 	serviceAnnotations := service.GetObjectMeta().GetAnnotations()
+	namespace := service.GetObjectMeta().GetNamespace()
 
-	clusterTopologyService := Service{
+	clusterTopologyService := &Service{
 		ServiceID:      service.GetObjectMeta().GetName(),
+		Namespace:      namespace,
 		Version:        version,
 		ServiceSpec:    &service.Spec,
 		DeploymentSpec: &deployment.Spec,
@@ -278,10 +316,13 @@ func newClusterTopologyServiceFromServiceAndDeployment(service *corev1.Service, 
 	if ok && isExternal == "true" {
 		clusterTopologyService.IsExternal = true
 	}
-
 	isShared, ok := serviceAnnotations["kardinal.dev.service/shared"]
 	if ok && isShared == "true" {
 		clusterTopologyService.IsShared = true
+	}
+	isManaged, ok := serviceAnnotations["kardinal.dev/managed"]
+	if ok && isManaged == "true" {
+		clusterTopologyService.IsManaged = true
 	}
 	return clusterTopologyService
 }

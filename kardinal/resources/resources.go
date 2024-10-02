@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/kurtosis-tech/stacktrace"
+	"github.com/samber/lo"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,17 +33,17 @@ func GetNamespaceResources(ctx context.Context, namespace string, cl client.Clie
 	}
 
 	return &Namespace{
-		Services:    services,
-		Deployments: deployments,
-		Flows:       flows,
+		Services:    lo.Map(services.Items, func(service corev1.Service, _ int) *corev1.Service { return &service }),
+		Deployments: lo.Map(deployments.Items, func(deployment appsv1.Deployment, _ int) *appsv1.Deployment { return &deployment }),
+		Flows:       lo.Map(flows.Items, func(flow kardinalcorev1.Flow, _ int) *kardinalcorev1.Flow { return &flow }),
 	}, nil
 }
 
-func GetDeploymentFromName(name string, deployments *appsv1.DeploymentList) *appsv1.Deployment {
-	for _, deployment := range deployments.Items {
+func GetDeploymentFromName(name string, deployments []*appsv1.Deployment) *appsv1.Deployment {
+	for _, deployment := range deployments {
 		deploymentName := getObjectName(deployment.GetObjectMeta().(*metav1.ObjectMeta))
 		if name == deploymentName {
-			return &deployment
+			return deployment
 		}
 	}
 	return nil

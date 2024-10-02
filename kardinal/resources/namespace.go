@@ -8,7 +8,27 @@ import (
 
 type Namespace struct {
 	Name        string
-	Services    *corev1.ServiceList      `json:"services"`
-	Deployments *appsv1.DeploymentList   `json:"deployments"`
-	Flows       *kardinalcorev1.FlowList `json:"flows"`
+	Services    []*corev1.Service      `json:"services"`
+	Deployments []*appsv1.Deployment   `json:"deployments"`
+	Flows       []*kardinalcorev1.Flow `json:"flows"`
+}
+
+func (namespace *Namespace) GetService(name string) *corev1.Service {
+	for _, service := range namespace.Services {
+		if service.Name == name {
+			return service
+		}
+	}
+
+	return nil
+}
+
+func (namespace *Namespace) GetDeployment(name string) *appsv1.Deployment {
+	for _, deployment := range namespace.Deployments {
+		if deployment.Name == name {
+			return deployment
+		}
+	}
+
+	return nil
 }
