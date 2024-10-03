@@ -14,21 +14,21 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 	logrus.Info("Reconciling")
 
 	// Get k8s resources
-	namespaceStr := "baseline"
 	logrus.Infof("Get cluster resources")
-	namespaces, err := resources.GetNamespaces(ctx, cl)
+	clusterResources, err := resources.NewResourcesFromClient(ctx, cl)
 	if err != nil {
-		return stacktrace.Propagate(err, "An error occurred retrieving the list of resources for namespace %s", namespaceStr)
+		return stacktrace.Propagate(err, "An error occurred retrieving the list of resources")
 	}
 	// Generate base cluster topology
 	logrus.Info("Generate base cluster topology")
-	baseClusterTopology, err := topology.NewClusterTopologyFromResources(namespaces, namespaceStr)
+	version := "baseline"
+	baseClusterTopology, err := topology.NewClusterTopologyFromResources(clusterResources, version)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred generating the base cluster topology")
 	}
 
 	// Update base cluster topology with flows
-	for _, namespace := range namespaces {
+	for _, namespace := range clusterResources.Namespaces {
 		for _, flow := range namespace.Flows {
 			logrus.Infof("Processing flow %s", flow.Name)
 			service, err := baseClusterTopology.GetService(flow.Spec.Service, namespace.Name)
@@ -55,7 +55,7 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 	}
 
 	// Reconcile
-	err = baseClusterTopology.ApplyResources(ctx, namespaces, cl)
+	err = baseClusterTopology.ApplyResources(ctx, clusterResources, cl)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the resources")
 	}

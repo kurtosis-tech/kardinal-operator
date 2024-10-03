@@ -12,7 +12,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func GetNamespaces(ctx context.Context, cl client.Client) ([]*Namespace, error) {
+type Resources struct {
+	Namespaces []*Namespace
+}
+
+func NewResourcesFromClient(ctx context.Context, cl client.Client) (*Resources, error) {
 
 	namespaces := []*Namespace{}
 	coreV1Namespaces := &corev1.NamespaceList{}
@@ -22,7 +26,7 @@ func GetNamespaces(ctx context.Context, cl client.Client) ([]*Namespace, error) 
 	}
 
 	for _, coreV1Namespace := range coreV1Namespaces.Items {
-		namespace, err := GetNamespaceResources(ctx, coreV1Namespace.Name, cl)
+		namespace, err := getNamespaceResources(ctx, coreV1Namespace.Name, cl)
 		if err != nil {
 			return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of namespaces")
 		}
@@ -30,10 +34,10 @@ func GetNamespaces(ctx context.Context, cl client.Client) ([]*Namespace, error) 
 		namespaces = append(namespaces, namespace)
 	}
 
-	return namespaces, nil
+	return &Resources{Namespaces: namespaces}, nil
 }
 
-func GetNamespaceResources(ctx context.Context, namespace string, cl client.Client) (*Namespace, error) {
+func getNamespaceResources(ctx context.Context, namespace string, cl client.Client) (*Namespace, error) {
 
 	services := &corev1.ServiceList{}
 	err := cl.List(ctx, services, client.InNamespace(namespace))
@@ -68,6 +72,16 @@ func GetDeploymentFromName(name string, deployments []*appsv1.Deployment) *appsv
 			return deployment
 		}
 	}
+	return nil
+}
+
+func (resources *Resources) GetNamespaceByName(namespace string) *Namespace {
+	for _, resourcesNamespace := range resources.Namespaces {
+		if resourcesNamespace.Name == namespace {
+			return resourcesNamespace
+		}
+	}
+
 	return nil
 }
 

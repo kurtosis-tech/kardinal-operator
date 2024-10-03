@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kurtosis-tech/stacktrace"
+	"github.com/samber/lo"
 	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -41,7 +42,7 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(flowPatch *FlowPatch) err
 	for _, servicePatch := range flowPatch.ServicePatches {
 		targetService, err := clusterTopology.GetService(servicePatch.Service, servicePatch.Namespace)
 		if err != nil {
-			return err
+			return stacktrace.Propagate(err, "An error occurred retrieving the service %s in namespace %s", servicePatch.Service, servicePatch.Namespace)
 		}
 		modifiedTargetService := DeepCopyService(targetService)
 		modifiedTargetService.DeploymentSpec = servicePatch.DeploymentSpec
@@ -53,7 +54,7 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(flowPatch *FlowPatch) err
 	return nil
 }
 
-func (clusterTopology *ClusterTopology) GetResources() (map[string]*resources.Namespace, error) {
+func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, error) {
 	namespaces := map[string]*resources.Namespace{}
 	for _, service := range clusterTopology.Services {
 		if service.IsManaged {
@@ -71,17 +72,20 @@ func (clusterTopology *ClusterTopology) GetResources() (map[string]*resources.Na
 		}
 	}
 
-	return namespaces, nil
+	clusterTopologyResources := &resources.Resources{
+		Namespaces: lo.Values(namespaces),
+	}
+	return clusterTopologyResources, nil
 }
 
-func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, namespaces []*resources.Namespace, cl client.Client) error {
-	clusterTopologyNamespaces, err := clusterTopology.GetResources()
+func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clusterResources *resources.Resources, cl client.Client) error {
+	clusterTopologyResources, err := clusterTopology.GetResources()
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred retrieving the list of resources")
 	}
 
-	for _, namespace := range namespaces {
-		clusterTopologyNamespace := clusterTopologyNamespaces[namespace.Name]
+	for _, namespace := range clusterResources.Namespaces {
+		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
 		if clusterTopologyNamespace != nil {
 			for _, service := range clusterTopologyNamespace.Services {
 				if namespace.GetService(service.Name) == nil {
@@ -244,7 +248,6 @@ func NewServiceFromServiceAndDeployment(coreV1Service *corev1.Service, deploymen
 	if ok && isManaged == "true" {
 		clusterTopologyService.IsManaged = true
 	}
-	logrus.Infof("Service %s in namespace %s", clusterTopologyService.ServiceID, clusterTopologyService.Namespace)
 	return clusterTopologyService
 }
 
@@ -302,13 +305,13 @@ type ServicePatch struct {
 }
 
 func NewClusterTopologyFromResources(
-	namespaces []*resources.Namespace,
+	clusterResources *resources.Resources,
 	version string,
 ) (*ClusterTopology, error) {
 	clusterTopologyServices := []*Service{}
 	clusterTopologyServiceDependencies := []*ServiceDependency{}
 
-	for _, resourceNamespace := range namespaces {
+	for _, resourceNamespace := range clusterResources.Namespaces {
 		services, serviceDependencies, err := processServices(resourceNamespace.Services, resourceNamespace.Deployments, version)
 		if err != nil {
 			return nil, stacktrace.NewError("an error occurred processing the service configs")
@@ -322,9 +325,10 @@ func NewClusterTopologyFromResources(
 		return nil, stacktrace.NewError("At least one service is required in addition to the ingress service(s)")
 	}
 
-	clusterTopology := ClusterTopology{}
-	clusterTopology.Services = clusterTopologyServices
-	clusterTopology.ServiceDependencies = clusterTopologyServiceDependencies
+	clusterTopology := ClusterTopology{
+		Services:            clusterTopologyServices,
+		ServiceDependencies: clusterTopologyServiceDependencies,
+	}
 
 	return &clusterTopology, nil
 }
