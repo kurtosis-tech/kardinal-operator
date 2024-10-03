@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/brunoga/deep"
 	"github.com/kurtosis-tech/stacktrace"
 	"github.com/samber/lo"
 	"github.com/sirupsen/logrus"
@@ -44,7 +45,10 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(flowPatch *FlowPatch) err
 		if err != nil {
 			return stacktrace.Propagate(err, "An error occurred retrieving the service %s in namespace %s", servicePatch.Service, servicePatch.Namespace)
 		}
-		modifiedTargetService := DeepCopyService(targetService)
+		modifiedTargetService, err := deep.Copy(targetService)
+		if err != nil {
+			return stacktrace.Propagate(err, "An error occurred copying the target service %s", targetService.ServiceID)
+		}
 		modifiedTargetService.DeploymentSpec = servicePatch.DeploymentSpec
 		modifiedTargetService.Version = flowID
 		modifiedTargetService.IsManaged = true

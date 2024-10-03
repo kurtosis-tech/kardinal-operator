@@ -1,0 +1,46 @@
+# Our desired pipeline using only a Nix shell environment
+name: Check and build Kardinal
+
+permissions:
+  id-token: write
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  check_go:
+    name: Check Go
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v3
+      
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '^1.22.0'
+
+      - name: Check Go formatting
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            exit 1
+          fi
+
+  build:
+    name: Build
+    needs: [check_go]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v3
+
+      - name: Build operator binary
+        run: make build
