@@ -1,5 +1,4 @@
-# Our desired pipeline using only a Nix shell environment
-name: Check and build Kardinal
+name: Check and build Kardinal Operator
 
 permissions:
   id-token: write
