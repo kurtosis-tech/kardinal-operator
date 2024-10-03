@@ -12,6 +12,27 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+func GetNamespaces(ctx context.Context, cl client.Client) ([]*Namespace, error) {
+
+	namespaces := []*Namespace{}
+	coreV1Namespaces := &corev1.NamespaceList{}
+	err := cl.List(ctx, coreV1Namespaces)
+	if err != nil {
+		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of namespaces")
+	}
+
+	for _, coreV1Namespace := range coreV1Namespaces.Items {
+		namespace, err := GetNamespaceResources(ctx, coreV1Namespace.Name, cl)
+		if err != nil {
+			return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of namespaces")
+		}
+
+		namespaces = append(namespaces, namespace)
+	}
+
+	return namespaces, nil
+}
+
 func GetNamespaceResources(ctx context.Context, namespace string, cl client.Client) (*Namespace, error) {
 
 	services := &corev1.ServiceList{}
@@ -33,6 +54,7 @@ func GetNamespaceResources(ctx context.Context, namespace string, cl client.Clie
 	}
 
 	return &Namespace{
+		Name:        namespace,
 		Services:    lo.Map(services.Items, func(service corev1.Service, _ int) *corev1.Service { return &service }),
 		Deployments: lo.Map(deployments.Items, func(deployment appsv1.Deployment, _ int) *appsv1.Deployment { return &deployment }),
 		Flows:       lo.Map(flows.Items, func(flow kardinalcorev1.Flow, _ int) *kardinalcorev1.Flow { return &flow }),

@@ -1,18 +1,21 @@
 package topology
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/kurtosis-tech/stacktrace"
+	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	net "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"kardinal.dev/kardinal-operator/kardinal/resources"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type ClusterTopology struct {
@@ -20,12 +23,11 @@ type ClusterTopology struct {
 	Ingress             *Ingress             `json:"ingress"`
 	Services            []*Service           `json:"services"`
 	ServiceDependencies []*ServiceDependency `json:"serviceDependencies"`
-	Namespace           string               `json:"namespace"`
 }
 
-func (clusterTopology *ClusterTopology) GetService(serviceName string) (*Service, error) {
+func (clusterTopology *ClusterTopology) GetService(serviceName string, namespace string) (*Service, error) {
 	for _, service := range clusterTopology.Services {
-		if service.ServiceID == serviceName {
+		if service.Namespace == namespace && service.ServiceID == serviceName {
 			return service, nil
 		}
 	}
@@ -37,8 +39,7 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(flowPatch *FlowPatch) err
 	flowID := flowPatch.FlowId
 
 	for _, servicePatch := range flowPatch.ServicePatches {
-		serviceID := servicePatch.Service
-		targetService, err := clusterTopology.GetService(serviceID)
+		targetService, err := clusterTopology.GetService(servicePatch.Service, servicePatch.Namespace)
 		if err != nil {
 			return err
 		}
@@ -71,6 +72,54 @@ func (clusterTopology *ClusterTopology) GetResources() (map[string]*resources.Na
 	}
 
 	return namespaces, nil
+}
+
+func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, namespaces []*resources.Namespace, cl client.Client) error {
+	clusterTopologyNamespaces, err := clusterTopology.GetResources()
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred retrieving the list of resources")
+	}
+
+	for _, namespace := range namespaces {
+		clusterTopologyNamespace := clusterTopologyNamespaces[namespace.Name]
+		if clusterTopologyNamespace != nil {
+			for _, service := range clusterTopologyNamespace.Services {
+				if namespace.GetService(service.Name) == nil {
+					logrus.Infof("Creating service %s", service.Name)
+					_ = cl.Create(ctx, service)
+				}
+			}
+			for _, deployment := range clusterTopologyNamespace.Deployments {
+				if namespace.GetDeployment(deployment.Name) == nil {
+					logrus.Infof("Creating deployment %s", deployment.Name)
+					_ = cl.Create(ctx, deployment)
+				}
+			}
+		}
+
+		for _, service := range namespace.Services {
+			serviceAnnotations := service.Annotations
+			isManaged, found := serviceAnnotations["kardinal.dev/managed"]
+			if found && isManaged == "true" {
+				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetService(service.Name) == nil {
+					logrus.Infof("Deleting service %s", service.Name)
+					_ = cl.Delete(ctx, service)
+				}
+			}
+		}
+		for _, deployment := range namespace.Deployments {
+			deploymentAnnotations := deployment.Annotations
+			isManaged, found := deploymentAnnotations["kardinal.dev/managed"]
+			if found && isManaged == "true" {
+				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetDeployment(deployment.Name) == nil {
+					logrus.Infof("Deleting deployment %s", deployment.Name)
+					_ = cl.Delete(ctx, deployment)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 type Service struct {
@@ -171,11 +220,13 @@ func NewServiceFromServiceAndDeployment(coreV1Service *corev1.Service, deploymen
 	namespace := coreV1Service.Namespace
 
 	clusterTopologyService := &Service{
-		ServiceID:      coreV1Service.Name,
-		Namespace:      namespace,
-		Version:        version,
-		ServiceSpec:    &coreV1Service.Spec,
-		DeploymentSpec: &deployment.Spec,
+		ServiceID:   coreV1Service.Name,
+		Namespace:   namespace,
+		Version:     version,
+		ServiceSpec: &coreV1Service.Spec,
+	}
+	if deployment != nil {
+		clusterTopologyService.DeploymentSpec = &deployment.Spec
 	}
 	isStateful, ok := serviceAnnotations["kardinal.dev.service/stateful"]
 	if ok && isStateful == "true" {
@@ -193,6 +244,7 @@ func NewServiceFromServiceAndDeployment(coreV1Service *corev1.Service, deploymen
 	if ok && isManaged == "true" {
 		clusterTopologyService.IsManaged = true
 	}
+	logrus.Infof("Service %s in namespace %s", clusterTopologyService.ServiceID, clusterTopologyService.Namespace)
 	return clusterTopologyService
 }
 
@@ -244,19 +296,25 @@ type FlowPatch struct {
 }
 
 type ServicePatch struct {
+	Namespace      string
 	Service        string
 	DeploymentSpec *appsv1.DeploymentSpec
 }
 
 func NewClusterTopologyFromResources(
-	services []*corev1.Service,
-	deployments []*appsv1.Deployment,
-	namespace string,
+	namespaces []*resources.Namespace,
 	version string,
 ) (*ClusterTopology, error) {
-	clusterTopologyServices, clusterTopologyServiceDependencies, err := processServices(services, deployments, version)
-	if err != nil {
-		return nil, stacktrace.NewError("an error occurred processing the service configs")
+	clusterTopologyServices := []*Service{}
+	clusterTopologyServiceDependencies := []*ServiceDependency{}
+
+	for _, resourceNamespace := range namespaces {
+		services, serviceDependencies, err := processServices(resourceNamespace.Services, resourceNamespace.Deployments, version)
+		if err != nil {
+			return nil, stacktrace.NewError("an error occurred processing the service configs")
+		}
+		clusterTopologyServices = append(clusterTopologyServices, services...)
+		clusterTopologyServiceDependencies = append(clusterTopologyServiceDependencies, serviceDependencies...)
 	}
 
 	// some validations
@@ -265,7 +323,6 @@ func NewClusterTopologyFromResources(
 	}
 
 	clusterTopology := ClusterTopology{}
-	clusterTopology.Namespace = namespace
 	clusterTopology.Services = clusterTopologyServices
 	clusterTopology.ServiceDependencies = clusterTopologyServiceDependencies
 
