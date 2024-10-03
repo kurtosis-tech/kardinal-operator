@@ -45,7 +45,8 @@ jobs:
  
       - name: Deploy the boutique demo
         run: |
-          kubectl apply -f ci/obd-demo.yaml
+          kubectl create namespace baseline
+          kubectl apply -f ci/obd-demo.yaml -n baseline
 
       - name: Validate that the boutique demo is up and running
         run: |
