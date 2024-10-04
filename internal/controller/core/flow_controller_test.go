@@ -38,7 +38,7 @@ var _ = Describe("Flow Controller", func() {
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "baseline",
 		}
 		flow := &corev1.Flow{}
 
@@ -49,9 +49,12 @@ var _ = Describe("Flow Controller", func() {
 				resource := &corev1.Flow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
-						Namespace: "default",
+						Namespace: "baseline",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: corev1.FlowSpec{
+						Service: "frontend",
+						Image:   "kurtosistech/frontend:demo-frontend",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

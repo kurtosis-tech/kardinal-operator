@@ -1,0 +1,67 @@
+name: Tests
+
+permissions:
+  id-token: write
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v3
+
+      - name: Start minikube
+        uses: manusa/actions-setup-minikube@v2.11.0
+        id: minikube
+        with:
+          minikube version: "v1.33.0"
+          kubernetes version: "v1.30.0"
+          driver: docker
+          start args: --embed-certs --addons=ingress,metrics-server
+      
+      - name: Install Istio
+        run: |
+          ISTIO_VERSION="1.23.0"
+          echo "Installing Istio ..."
+          mkdir istio_tmp
+          pushd istio_tmp >/dev/null
+              curl -L https://istio.io/downloadIstio | ISTIO_VERSION=${ISTIO_VERSION} sh -
+              cd istio-${ISTIO_VERSION}
+              export PATH=$PWD/bin:$PATH
+              istioctl install --set profile=demo -y
+          popd
+ 
+      - name: Deploy the boutique demo
+        run: |
+          kubectl create namespace baseline
+          kubectl apply -f ci/obd-demo.yaml -n baseline
+
+      - name: Validate that the boutique demo is up and running
+        run: |
+          # Check that the four baseline service pods are running and ready
+          while [ $(kubectl get pods -n baseline --no-headers -o custom-columns=NAMESPACE:metadata.namespace,POD:metadata.name,PodIP:status.podIP,READY-true:status.containerStatuses[*].ready | grep "true" | wc -l) -ne 4 ]
+          do
+              echo "Waiting for baseline pods to run..."
+              kubectl get pods -n baseline -o custom-columns=NAMESPACE:metadata.namespace,POD:metadata.name,PodIP:status.podIP,READY-true:status.containerStatuses[*].ready
+              ((c++)) && ((c==12)) && exit 1
+              sleep 10
+          done
+          apps=$(kubectl get pods -n baseline -o custom-columns=:metadata.labels.app | tr " " "\n" | sort -g | tr "\n" " " | xargs)
+          echo ${apps}
+          if [ "${apps}" != "cartservice frontend postgres productcatalogservice" ]; then exit 1; fi
+
+      - name: Run operator tests
+        run: |
+          make test

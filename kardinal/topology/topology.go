@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/brunoga/deep"
 	"github.com/kurtosis-tech/stacktrace"
 	"github.com/samber/lo"
 	"github.com/sirupsen/logrus"
@@ -17,6 +18,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"kardinal.dev/kardinal-operator/kardinal/resources"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	trueStr = "true"
 )
 
 type ClusterTopology struct {
@@ -44,7 +49,10 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(flowPatch *FlowPatch) err
 		if err != nil {
 			return stacktrace.Propagate(err, "An error occurred retrieving the service %s in namespace %s", servicePatch.Service, servicePatch.Namespace)
 		}
-		modifiedTargetService := DeepCopyService(targetService)
+		modifiedTargetService, err := deep.Copy(targetService)
+		if err != nil {
+			return stacktrace.Propagate(err, "An error occurred copying the target service %s", targetService.ServiceID)
+		}
 		modifiedTargetService.DeploymentSpec = servicePatch.DeploymentSpec
 		modifiedTargetService.Version = flowID
 		modifiedTargetService.IsManaged = true
@@ -104,7 +112,7 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 		for _, service := range namespace.Services {
 			serviceAnnotations := service.Annotations
 			isManaged, found := serviceAnnotations["kardinal.dev/managed"]
-			if found && isManaged == "true" {
+			if found && isManaged == trueStr {
 				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetService(service.Name) == nil {
 					logrus.Infof("Deleting service %s", service.Name)
 					_ = cl.Delete(ctx, service)
@@ -114,7 +122,7 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 		for _, deployment := range namespace.Deployments {
 			deploymentAnnotations := deployment.Annotations
 			isManaged, found := deploymentAnnotations["kardinal.dev/managed"]
-			if found && isManaged == "true" {
+			if found && isManaged == trueStr {
 				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetDeployment(deployment.Name) == nil {
 					logrus.Infof("Deleting deployment %s", deployment.Name)
 					_ = cl.Delete(ctx, deployment)
@@ -142,7 +150,7 @@ type Service struct {
 func (service *Service) GetCoreV1Service(namespace string) *corev1.Service {
 	kardinalManaged := "false"
 	if service.Version != namespace {
-		kardinalManaged = "true"
+		kardinalManaged = trueStr
 	}
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
@@ -166,7 +174,7 @@ func (service *Service) GetCoreV1Service(namespace string) *corev1.Service {
 func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment {
 	kardinalManaged := "false"
 	if service.Version != namespace {
-		kardinalManaged = "true"
+		kardinalManaged = trueStr
 	}
 	deployment := appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
@@ -205,7 +213,7 @@ func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment
 	}
 	deployment.Spec.Template.ObjectMeta = metav1.ObjectMeta{
 		Annotations: map[string]string{
-			"sidecar.istio.io/inject": "true",
+			"sidecar.istio.io/inject": trueStr,
 			// TODO: make this a flag to help debugging
 			// One can view the logs with: kubeclt logs -f -l app=<serviceID> -n <namespace> -c istio-proxy
 			"sidecar.istio.io/componentLogLevel": "lua:info",
@@ -233,19 +241,19 @@ func NewServiceFromServiceAndDeployment(coreV1Service *corev1.Service, deploymen
 		clusterTopologyService.DeploymentSpec = &deployment.Spec
 	}
 	isStateful, ok := serviceAnnotations["kardinal.dev.service/stateful"]
-	if ok && isStateful == "true" {
+	if ok && isStateful == trueStr {
 		clusterTopologyService.IsStateful = true
 	}
 	isExternal, ok := serviceAnnotations["kardinal.dev.service/external"]
-	if ok && isExternal == "true" {
+	if ok && isExternal == trueStr {
 		clusterTopologyService.IsExternal = true
 	}
 	isShared, ok := serviceAnnotations["kardinal.dev.service/shared"]
-	if ok && isShared == "true" {
+	if ok && isShared == trueStr {
 		clusterTopologyService.IsShared = true
 	}
 	isManaged, ok := serviceAnnotations["kardinal.dev/managed"]
-	if ok && isManaged == "true" {
+	if ok && isManaged == trueStr {
 		clusterTopologyService.IsManaged = true
 	}
 	return clusterTopologyService
