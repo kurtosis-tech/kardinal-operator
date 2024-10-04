@@ -44,5 +44,5 @@ jobs:
       - name: Build operator binary
         run: make build
 
-      - name: Build operator binary
+      - name: Linter
         run: make lint
