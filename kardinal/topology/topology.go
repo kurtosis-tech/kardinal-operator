@@ -32,6 +32,18 @@ type ClusterTopology struct {
 	ServiceDependencies []*ServiceDependency `json:"serviceDependencies"`
 }
 
+func (clusterTopology *ClusterTopology) Print() {
+	fmt.Println("Cluster Topology")
+	fmt.Printf("Flow ID: %s\n", clusterTopology.FlowID)
+	clusterTopology.Ingress.Print()
+	for _, service := range clusterTopology.Services {
+		service.Print()
+	}
+	for _, serviceDependency := range clusterTopology.ServiceDependencies {
+		serviceDependency.Print()
+	}
+}
+
 func (clusterTopology *ClusterTopology) GetService(serviceName string, namespace string) (*Service, error) {
 	for _, service := range clusterTopology.Services {
 		if service.Namespace == namespace && service.ServiceID == serviceName {
@@ -64,6 +76,7 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(
 	statefulServices = lo.Uniq(statefulServices)
 
 	modifiedTargetService := deep.MustCopy(targetService)
+	modifiedTargetService.IsManaged = true
 	modifiedTargetService.DeploymentSpec = deploymentSpec
 	modifiedTargetService.Version = flowId
 	err := clusterTopology.UpdateService(modifiedTargetService)
@@ -76,6 +89,7 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(
 			// Don't modify the original service
 			modifiedService := deep.MustCopy(service)
 			modifiedService.Version = flowId
+			modifiedService.IsManaged = true
 
 			if !modifiedService.IsStateful {
 				panic(fmt.Sprintf("Service %s is not stateful but is in stateful paths", modifiedService.ServiceID))
@@ -100,26 +114,6 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(
 					}
 				}
 			}
-		}
-	}
-
-	// Update service dependencies
-	for idx, dependency := range clusterTopology.ServiceDependencies {
-		service := dependency.Service
-		if service.IsManaged {
-			baseService, err := clusterTopology.GetService(service.ServiceID, service.Namespace)
-			if err != nil {
-				return stacktrace.Propagate(err, "An error occurred getting the base service %s in namespace %s", service.ServiceID, service.Namespace)
-			}
-			clusterTopology.ServiceDependencies[idx].Service = baseService
-		}
-		dependsOnService := dependency.DependsOnService
-		if dependsOnService.IsManaged {
-			baseDependsOnService, err := clusterTopology.GetService(dependsOnService.ServiceID, dependsOnService.Namespace)
-			if err != nil {
-				return stacktrace.Propagate(err, "An error occurred getting the base service %s in namespace %s", dependsOnService.ServiceID, dependsOnService.Namespace)
-			}
-			clusterTopology.ServiceDependencies[idx].DependsOnService = baseDependsOnService
 		}
 	}
 
@@ -253,7 +247,12 @@ func applyDeploymentResources(ctx context.Context, clusterResources *resources.R
 					}
 				}
 			} else {
-				annotationsToAdd := map[string]string{}
+				annotationsToAdd := map[string]string{
+					"sidecar.istio.io/inject": "true",
+					// TODO: make this a flag to help debugging
+					// One can view the logs with: kubeclt logs -f -l app=<serviceID> -n <namespace> -c istio-proxy
+					"sidecar.istio.io/componentLogLevel": "lua:info",
+				}
 				resources.AddAnnotations(&deployment.ObjectMeta, annotationsToAdd)
 				err := cl.Update(ctx, deployment)
 				if err != nil {
@@ -327,6 +326,29 @@ func (clusterTopology *ClusterTopology) MoveServiceToVersion(service *Service, v
 	return clusterTopology.UpdateService(duplicatedService)
 }
 
+func (clusterTopology *ClusterTopology) Merge(clusterTopologies []*ClusterTopology) *ClusterTopology {
+	mergedClusterTopology := &ClusterTopology{
+		FlowID:              "all",
+		Services:            deep.MustCopy(clusterTopology.Services),
+		ServiceDependencies: deep.MustCopy(clusterTopology.ServiceDependencies),
+		Ingress:             deep.MustCopy(clusterTopology.Ingress),
+	}
+	for _, topology := range clusterTopologies {
+		mergedClusterTopology.Services = append(mergedClusterTopology.Services, topology.Services...)
+		mergedClusterTopology.ServiceDependencies = append(mergedClusterTopology.ServiceDependencies, topology.ServiceDependencies...)
+		mergedClusterTopology.Ingress.ActiveFlowIDs = append(mergedClusterTopology.Ingress.ActiveFlowIDs, topology.Ingress.ActiveFlowIDs...)
+	}
+	mergedClusterTopology.Ingress.ActiveFlowIDs = lo.Uniq(mergedClusterTopology.Ingress.ActiveFlowIDs)
+
+	// TODO improve the filtering method, we could implement the `Service.Equal` method to compare and filter the services
+	// TODO and inside this method we could use the k8s service marshall method (https://pkg.go.dev/k8s.io/api/core/v1#Service.Marsha) and also the same for other k8s fields
+	// TODO it should be faster
+	mergedClusterTopology.Services = lo.UniqBy(mergedClusterTopology.Services, mustGetMarshalledKey[*Service])
+	mergedClusterTopology.ServiceDependencies = lo.UniqBy(mergedClusterTopology.ServiceDependencies, mustGetMarshalledKey[*ServiceDependency])
+
+	return mergedClusterTopology
+}
+
 type Service struct {
 	ServiceID               string                 `json:"serviceID"`
 	Namespace               string                 `json:"namespace"`
@@ -338,6 +360,13 @@ type Service struct {
 	IsShared                bool                   `json:"isShared"`
 	OriginalVersionIfShared string                 `json:"originalVersionIfShared"`
 	IsManaged               bool                   `json:"isManaged"`
+}
+
+func (service *Service) Print() {
+	fmt.Printf("Service %s\n", service.ServiceID)
+	fmt.Printf("\tNamespace: %s\n", service.Namespace)
+	fmt.Printf("\tVersion: %s\n", service.Version)
+	fmt.Printf("\tManaged: %t\n", service.IsManaged)
 }
 
 func (service *Service) GetCoreV1Service(namespace string) *corev1.Service {
@@ -502,9 +531,22 @@ type ServiceDependency struct {
 	DependencyPort   *corev1.ServicePort `json:"dependencyPort"`
 }
 
+func (serviceDependency *ServiceDependency) Print() {
+	fmt.Println("Dependency")
+	fmt.Println("Source")
+	serviceDependency.Service.Print()
+	fmt.Println("Target")
+	serviceDependency.DependsOnService.Print()
+}
+
 type Ingress struct {
 	ActiveFlowIDs []string       `json:"activeFlowIDs"`
 	Ingresses     []*net.Ingress `json:"ingresses"`
+}
+
+func (ingress *Ingress) Print() {
+	fmt.Println("Ingress")
+	fmt.Printf("Active Flow IDs: %v\n", ingress.ActiveFlowIDs)
 }
 
 type FlowPatch struct {

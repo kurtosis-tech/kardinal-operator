@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"strings"
 
 	"github.com/kurtosis-tech/stacktrace"
 	"github.com/samber/lo"
@@ -30,7 +31,22 @@ func NewResourcesFromClient(ctx context.Context, cl client.Client) (*Resources, 
 		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of namespaces")
 	}
 
+	namespacePrefixesToIgnore := []string{
+		"default",
+		"ingress-nginx",
+		"istio",
+		"kube",
+	}
 	for _, coreV1Namespace := range coreV1Namespaces.Items {
+		ignore := false
+		for _, prefix := range namespacePrefixesToIgnore {
+			if strings.HasPrefix(coreV1Namespace.Name, prefix) {
+				ignore = true
+			}
+		}
+		if ignore {
+			continue
+		}
 		namespace, err := getNamespaceResources(ctx, coreV1Namespace.Name, cl)
 		if err != nil {
 			return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of namespaces")

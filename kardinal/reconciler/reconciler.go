@@ -26,6 +26,7 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred generating the base cluster topology")
 	}
+	baseClusterTopology.Print()
 
 	// Generate flow topologies
 	flowTopologies := []*topology.ClusterTopology{}
@@ -33,8 +34,8 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 		for _, flow := range namespace.Flows {
 			logrus.Infof("Processing flow %s", flow.Name)
 
-			clusterTopology := baseClusterTopology.Copy(flow.Name)
-			clusterGraph := clusterTopology.GetGraph()
+			flowTopology := baseClusterTopology.Copy(flow.Name)
+			clusterGraph := flowTopology.GetGraph()
 
 			service, err := baseClusterTopology.GetService(flow.Spec.Service, namespace.Name)
 			if err != nil {
@@ -43,15 +44,49 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 			deployment := resources.GetDeploymentFromName(service.ServiceID, namespace.Deployments)
 			deploymentCopy := deep.MustCopy(deployment)
 			deploymentCopy.Spec.Template.Spec.Containers[0].Image = flow.Spec.Image
-			err = clusterTopology.UpdateWithFlow(clusterGraph, flow.Name, service, &deploymentCopy.Spec)
+			err = flowTopology.UpdateWithFlow(clusterGraph, flow.Name, service, &deploymentCopy.Spec)
 			if err != nil {
 				return stacktrace.Propagate(err, "An error occurred updating the base cluster topology with flow %s", flow.Name)
 			}
-			flowTopologies = append(flowTopologies, clusterTopology)
+
+			baselineFlowVersion := namespace.Name
+			// Replace "baseline" version services with baseClusterTopology versions
+			for idx, service := range flowTopology.Services {
+				if service.Version == baselineFlowVersion {
+					baseService, err := baseClusterTopology.GetService(service.ServiceID, service.Namespace)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred retrieving the baseline service %s", service.ServiceID)
+					}
+					flowTopology.Services[idx] = baseService
+				}
+			}
+
+			// Update service dependencies
+			for idx, dependency := range flowTopology.ServiceDependencies {
+				if dependency.Service.Version == baselineFlowVersion {
+					baseService, err := baseClusterTopology.GetService(dependency.Service.ServiceID, dependency.Service.Namespace)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred retrieving the baseline service %s for dependency %s", service.ServiceID, dependency.Service.ServiceID)
+					}
+					flowTopology.ServiceDependencies[idx].Service = baseService
+				}
+				if dependency.DependsOnService.Version == baselineFlowVersion {
+					baseDependsOnService, err := baseClusterTopology.GetService(dependency.DependsOnService.ServiceID, dependency.DependsOnService.Namespace)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred retrieving the baseline service %s for depends on", dependency.DependsOnService.ServiceID)
+					}
+					flowTopology.ServiceDependencies[idx].DependsOnService = baseDependsOnService
+				}
+			}
+
+			flowTopology.Print()
+			flowTopologies = append(flowTopologies, flowTopology)
 		}
 	}
 
-	// TODO: merge flow topologies with base topology
+	// Merge flow topologies with base topology
+	baseClusterTopology.Merge(flowTopologies)
+	baseClusterTopology.Print()
 
 	// Reconcile
 	err = baseClusterTopology.ApplyResources(ctx, clusterResources, cl)
