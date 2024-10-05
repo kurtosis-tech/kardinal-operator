@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/brunoga/deep"
+	"github.com/dominikbraun/graph"
 	"github.com/kurtosis-tech/stacktrace"
 	"github.com/samber/lo"
 	"github.com/sirupsen/logrus"
@@ -41,25 +42,112 @@ func (clusterTopology *ClusterTopology) GetService(serviceName string, namespace
 	return nil, stacktrace.NewError("Service %s not found in the list of services", serviceName)
 }
 
-func (clusterTopology *ClusterTopology) UpdateWithFlow(flowPatch *FlowPatch) error {
-	flowID := flowPatch.FlowId
+func (clusterTopology *ClusterTopology) UpdateWithFlow(
+	clusterGraph graph.Graph[ServiceHash, *Service],
+	flowId string,
+	targetService *Service,
+	deploymentSpec *appsv1.DeploymentSpec,
+) error {
+	statefulPaths := clusterTopology.FindAllDownstreamStatefulPaths(targetService, clusterGraph)
+	statefulServices := make([]*Service, 0)
+	for _, path := range statefulPaths {
+		statefulServiceHash, found := lo.Last(path)
+		if !found {
+			return stacktrace.NewError("An error occurred finding the last stateful service hash in path %v", path)
+		}
+		statefulService, err := clusterGraph.Vertex(statefulServiceHash)
+		if err != nil {
+			return stacktrace.Propagate(err, "An error occurred getting stateful service vertex from graph")
+		}
+		statefulServices = append(statefulServices, statefulService)
+	}
+	statefulServices = lo.Uniq(statefulServices)
 
-	for _, servicePatch := range flowPatch.ServicePatches {
-		targetService, err := clusterTopology.GetService(servicePatch.Service, servicePatch.Namespace)
-		if err != nil {
-			return stacktrace.Propagate(err, "An error occurred retrieving the service %s in namespace %s", servicePatch.Service, servicePatch.Namespace)
+	modifiedTargetService := deep.MustCopy(targetService)
+	modifiedTargetService.DeploymentSpec = deploymentSpec
+	modifiedTargetService.Version = flowId
+	err := clusterTopology.UpdateService(modifiedTargetService)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred getting stateful service vertex from graph")
+	}
+
+	for serviceIdx, service := range clusterTopology.Services {
+		if lo.Contains(statefulServices, service) {
+			// Don't modify the original service
+			modifiedService := deep.MustCopy(service)
+			modifiedService.Version = flowId
+
+			if !modifiedService.IsStateful {
+				panic(fmt.Sprintf("Service %s is not stateful but is in stateful paths", modifiedService.ServiceID))
+			}
+
+			clusterTopology.Services[serviceIdx] = modifiedService
+			clusterTopology.UpdateDependencies(service, modifiedService)
+
+			// create versioned parents for non http stateful services
+			// TODO - this should be done for all non http services and not just the stateful ones
+			// 	every child should be copied; immediate parent duplicated
+			// 	if children of non http services support http then our routing will have to be modified
+			//  we should treat those http services as non http; a hack could be to remove the appProtocol HTTP marking
+			if !modifiedService.IsHTTP() {
+				logrus.Infof("Stateful service %s is non http; its parents shall be duplicated", modifiedService.ServiceID)
+				parents := clusterTopology.FindImmediateParents(service)
+				for _, parent := range parents {
+					logrus.Infof("Duplicating parent %s", parent.ServiceID)
+					err = clusterTopology.MoveServiceToVersion(parent, flowId)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred moving parent service %s to version %s", parent.ServiceID, flowId)
+					}
+				}
+			}
 		}
-		modifiedTargetService, err := deep.Copy(targetService)
-		if err != nil {
-			return stacktrace.Propagate(err, "An error occurred copying the target service %s", targetService.ServiceID)
+	}
+
+	// Update service dependencies
+	for idx, dependency := range clusterTopology.ServiceDependencies {
+		service := dependency.Service
+		if service.IsManaged {
+			baseService, err := clusterTopology.GetService(service.ServiceID, service.Namespace)
+			if err != nil {
+				return stacktrace.Propagate(err, "An error occurred getting the base service %s in namespace %s", service.ServiceID, service.Namespace)
+			}
+			clusterTopology.ServiceDependencies[idx].Service = baseService
 		}
-		modifiedTargetService.DeploymentSpec = servicePatch.DeploymentSpec
-		modifiedTargetService.Version = flowID
-		modifiedTargetService.IsManaged = true
-		clusterTopology.Services = append(clusterTopology.Services, modifiedTargetService)
+		dependsOnService := dependency.DependsOnService
+		if dependsOnService.IsManaged {
+			baseDependsOnService, err := clusterTopology.GetService(dependsOnService.ServiceID, dependsOnService.Namespace)
+			if err != nil {
+				return stacktrace.Propagate(err, "An error occurred getting the base service %s in namespace %s", dependsOnService.ServiceID, dependsOnService.Namespace)
+			}
+			clusterTopology.ServiceDependencies[idx].DependsOnService = baseDependsOnService
+		}
 	}
 
 	return nil
+}
+
+func (clusterTopology *ClusterTopology) UpdateService(modifiedService *Service) error {
+	for idx, service := range clusterTopology.Services {
+		if service.Namespace == modifiedService.Namespace && service.ServiceID == modifiedService.ServiceID {
+			clusterTopology.Services[idx] = modifiedService
+			clusterTopology.UpdateDependencies(service, modifiedService)
+			return nil
+		}
+	}
+
+	return stacktrace.NewError("Service %s not found in the list of services", modifiedService.ServiceID)
+}
+
+func (clusterTopology *ClusterTopology) UpdateDependencies(targetService *Service, modifiedService *Service) {
+	for ix, dependency := range clusterTopology.ServiceDependencies {
+		if dependency.Service == targetService {
+			dependency.Service = modifiedService
+		}
+		if dependency.DependsOnService == targetService {
+			dependency.DependsOnService = modifiedService
+		}
+		clusterTopology.ServiceDependencies[ix] = dependency
+	}
 }
 
 func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, error) {
@@ -92,19 +180,30 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 		return stacktrace.Propagate(err, "An error occurred retrieving the list of resources")
 	}
 
+	err = applyServiceResources(ctx, clusterResources, clusterTopologyResources, cl)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred applying the service resources")
+	}
+
+	err = applyDeploymentResources(ctx, clusterResources, clusterTopologyResources, cl)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred applying the deployment resources")
+	}
+
+	return nil
+}
+
+func applyServiceResources(ctx context.Context, clusterResources *resources.Resources, clusterTopologyResources *resources.Resources, cl client.Client) error {
 	for _, namespace := range clusterResources.Namespaces {
 		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
 		if clusterTopologyNamespace != nil {
 			for _, service := range clusterTopologyNamespace.Services {
 				if namespace.GetService(service.Name) == nil {
 					logrus.Infof("Creating service %s", service.Name)
-					_ = cl.Create(ctx, service)
-				}
-			}
-			for _, deployment := range clusterTopologyNamespace.Deployments {
-				if namespace.GetDeployment(deployment.Name) == nil {
-					logrus.Infof("Creating deployment %s", deployment.Name)
-					_ = cl.Create(ctx, deployment)
+					err := cl.Create(ctx, service)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred creating service %s", service.Name)
+					}
 				}
 			}
 		}
@@ -115,23 +214,117 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 			if found && isManaged == trueStr {
 				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetService(service.Name) == nil {
 					logrus.Infof("Deleting service %s", service.Name)
-					_ = cl.Delete(ctx, service)
-				}
-			}
-		}
-		for _, deployment := range namespace.Deployments {
-			deploymentAnnotations := deployment.Annotations
-			isManaged, found := deploymentAnnotations["kardinal.dev/managed"]
-			if found && isManaged == trueStr {
-				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetDeployment(deployment.Name) == nil {
-					logrus.Infof("Deleting deployment %s", deployment.Name)
-					_ = cl.Delete(ctx, deployment)
+					err := cl.Delete(ctx, service)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred deleting service %s", service.Name)
+					}
 				}
 			}
 		}
 	}
 
 	return nil
+}
+
+func applyDeploymentResources(ctx context.Context, clusterResources *resources.Resources, clusterTopologyResources *resources.Resources, cl client.Client) error {
+	for _, namespace := range clusterResources.Namespaces {
+		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
+		if clusterTopologyNamespace != nil {
+			for _, deployment := range clusterTopologyNamespace.Deployments {
+				if namespace.GetDeployment(deployment.Name) == nil {
+					logrus.Infof("Creating deployment %s", deployment.Name)
+					err := cl.Create(ctx, deployment)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred creating deployment %s", deployment.Name)
+					}
+				}
+			}
+		}
+
+		for _, deployment := range namespace.Deployments {
+			deploymentAnnotations := deployment.Annotations
+			isManaged, found := deploymentAnnotations["kardinal.dev/managed"]
+			if found && isManaged == trueStr {
+				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetDeployment(deployment.Name) == nil {
+					logrus.Infof("Deleting deployment %s", deployment.Name)
+					err := cl.Delete(ctx, deployment)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred deleting deployment %s", deployment.Name)
+					}
+				}
+			} else {
+				annotationsToAdd := map[string]string{}
+				resources.AddAnnotations(&deployment.ObjectMeta, annotationsToAdd)
+				err := cl.Update(ctx, deployment)
+				if err != nil {
+					return stacktrace.Propagate(err, "An error occurred updating deployment %s", deployment.Name)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func (clusterTopology *ClusterTopology) GetGraph() graph.Graph[ServiceHash, *Service] {
+	serviceHash := func(service *Service) ServiceHash {
+		return service.Hash()
+	}
+	graph := graph.New(serviceHash, graph.Directed())
+
+	for _, service := range clusterTopology.Services {
+		_ = graph.AddVertex(service)
+	}
+
+	for _, dependency := range clusterTopology.ServiceDependencies {
+		_ = graph.AddEdge(dependency.Service.Hash(), dependency.DependsOnService.Hash())
+	}
+
+	return graph
+}
+
+func (clusterTopology *ClusterTopology) Copy(flowId string) *ClusterTopology {
+	clusterTopologyCopy := clusterTopology
+	clusterTopologyCopy.FlowID = flowId
+	clusterTopologyCopy.Services = deep.MustCopy(clusterTopology.Services)
+	clusterTopologyCopy.ServiceDependencies = deep.MustCopy(clusterTopology.ServiceDependencies)
+	clusterTopology.Ingress = &Ingress{
+		ActiveFlowIDs: []string{flowId},
+		Ingresses:     deep.MustCopy(clusterTopology.Ingress.Ingresses),
+	}
+	return clusterTopologyCopy
+}
+
+func (clusterTopology *ClusterTopology) FindAllDownstreamStatefulPaths(targetService *Service, clusterGraph graph.Graph[ServiceHash, *Service]) [][]ServiceHash {
+	allPaths := make([][]ServiceHash, 0)
+	for _, service := range clusterTopology.Services {
+		if service.IsStateful {
+			paths, err := graph.AllPathsBetween(clusterGraph, targetService.Hash(), service.Hash())
+			if err != nil {
+				logrus.Infof("Error finding paths between %s and %s: %v", targetService.ServiceID, service.ServiceID, err)
+				paths = [][]ServiceHash{}
+			}
+			allPaths = append(allPaths, paths...)
+		}
+	}
+	return allPaths
+}
+
+func (clusterTopology *ClusterTopology) FindImmediateParents(service *Service) []*Service {
+	parents := make([]*Service, 0)
+	for _, dependency := range clusterTopology.ServiceDependencies {
+		if dependency.DependsOnService.Namespace == service.Namespace && dependency.DependsOnService.ServiceID == service.ServiceID {
+			parents = append(parents, dependency.Service)
+		}
+	}
+	return parents
+}
+
+func (clusterTopology *ClusterTopology) MoveServiceToVersion(service *Service, version string) error {
+	// Don't duplicate if its already duplicated
+	duplicatedService := deep.MustCopy(service)
+	duplicatedService.Version = version
+	return clusterTopology.UpdateService(duplicatedService)
 }
 
 type Service struct {
@@ -173,8 +366,10 @@ func (service *Service) GetCoreV1Service(namespace string) *corev1.Service {
 
 func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment {
 	kardinalManaged := "false"
+	name := service.ServiceID
 	if service.Version != namespace {
 		kardinalManaged = trueStr
+		name = fmt.Sprintf("%s-%s", service.ServiceID, service.Version)
 	}
 	deployment := appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
@@ -182,7 +377,7 @@ func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment
 			Kind:       "Deployment",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", service.ServiceID, service.Version),
+			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
 				"app":     service.ServiceID,
@@ -227,19 +422,30 @@ func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment
 	return &deployment
 }
 
-func NewServiceFromServiceAndDeployment(coreV1Service *corev1.Service, deployment *appsv1.Deployment, version string) *Service {
-	serviceAnnotations := coreV1Service.Annotations
-	namespace := coreV1Service.Namespace
+func (service *Service) IsHTTP() bool {
+	if service == nil || service.ServiceSpec == nil || len(service.ServiceSpec.Ports) == 0 {
+		return false
+	}
+	servicePort := service.ServiceSpec.Ports[0]
+	return servicePort.AppProtocol != nil && *servicePort.AppProtocol == "HTTP"
+}
 
+func NewServiceFromServiceAndDeployment(coreV1Service *corev1.Service, deployment *appsv1.Deployment) *Service {
+	namespace := coreV1Service.Namespace
+	labelVersion, found := coreV1Service.Labels["kardinal.dev/version"]
+	if !found {
+		labelVersion = namespace
+	}
 	clusterTopologyService := &Service{
 		ServiceID:   coreV1Service.Name,
-		Namespace:   namespace,
-		Version:     version,
+		Namespace:   coreV1Service.Namespace,
+		Version:     labelVersion,
 		ServiceSpec: &coreV1Service.Spec,
 	}
 	if deployment != nil {
 		clusterTopologyService.DeploymentSpec = &deployment.Spec
 	}
+	serviceAnnotations := coreV1Service.Annotations
 	isStateful, ok := serviceAnnotations["kardinal.dev.service/stateful"]
 	if ok && isStateful == trueStr {
 		clusterTopologyService.IsStateful = true
@@ -314,21 +520,34 @@ type ServicePatch struct {
 
 func NewClusterTopologyFromResources(
 	clusterResources *resources.Resources,
-	version string,
 ) (*ClusterTopology, error) {
 	clusterTopologyServices := []*Service{}
 	clusterTopologyServiceDependencies := []*ServiceDependency{}
+	var clusterTopologyIngress *Ingress
 
 	for _, resourceNamespace := range clusterResources.Namespaces {
-		services, serviceDependencies, err := processServices(resourceNamespace.Services, resourceNamespace.Deployments, version)
+		services, serviceDependencies, err := processServices(resourceNamespace.Services, resourceNamespace.Deployments)
 		if err != nil {
-			return nil, stacktrace.NewError("an error occurred processing the service configs")
+			return nil, stacktrace.NewError("an error occurred processing the resource services and deployments")
+		}
+		ingress := processIngresses(resourceNamespace.Ingresses)
+		if err != nil {
+			return nil, stacktrace.NewError("an error occurred processing the resource ingresses")
 		}
 		clusterTopologyServices = append(clusterTopologyServices, services...)
 		clusterTopologyServiceDependencies = append(clusterTopologyServiceDependencies, serviceDependencies...)
+		if len(ingress.Ingresses) > 0 {
+			if clusterTopologyIngress != nil {
+				return nil, stacktrace.NewError("More than one namespace has ingresses")
+			}
+			clusterTopologyIngress = ingress
+		}
 	}
 
 	// some validations
+	if len(clusterTopologyIngress.Ingresses) == 0 {
+		return nil, stacktrace.NewError("At least one ingress is required")
+	}
 	if len(clusterTopologyServices) == 0 {
 		return nil, stacktrace.NewError("At least one service is required in addition to the ingress service(s)")
 	}
@@ -336,12 +555,13 @@ func NewClusterTopologyFromResources(
 	clusterTopology := ClusterTopology{
 		Services:            clusterTopologyServices,
 		ServiceDependencies: clusterTopologyServiceDependencies,
+		Ingress:             clusterTopologyIngress,
 	}
 
 	return &clusterTopology, nil
 }
 
-func processServices(services []*corev1.Service, deployments []*appsv1.Deployment, version string) ([]*Service, []*ServiceDependency, error) {
+func processServices(services []*corev1.Service, deployments []*appsv1.Deployment) ([]*Service, []*ServiceDependency, error) {
 	clusterTopologyServices := []*Service{}
 	clusterTopologyServiceDependencies := []*ServiceDependency{}
 	externalServicesDependencies := []*ServiceDependency{}
@@ -358,7 +578,7 @@ func processServices(services []*corev1.Service, deployments []*appsv1.Deploymen
 		// 1- Service
 		serviceName := service.GetObjectMeta().GetName()
 		deployment := resources.GetDeploymentFromName(serviceName, deployments)
-		clusterTopologyService := NewServiceFromServiceAndDeployment(service, deployment, version)
+		clusterTopologyService := NewServiceFromServiceAndDeployment(service, deployment)
 
 		// 2- Service dependencies (creates a list of services with dependencies)
 		dependencies, ok := serviceAnnotations["kardinal.dev.service/dependencies"]
@@ -408,4 +628,21 @@ func getServiceAndPortFromClusterTopologyServices(serviceName string, servicePor
 	}
 
 	return nil, nil, stacktrace.NewError("Service %s and Port %s not found in the list of services", serviceName, servicePortName)
+}
+
+func processIngresses(ingresses []*net.Ingress) *Ingress {
+	clusterTopologyIngress := &Ingress{
+		ActiveFlowIDs: []string{resources.BaselineNamespace},
+		Ingresses:     []*net.Ingress{},
+	}
+	for _, ingress := range ingresses {
+		ingressAnnotations := ingress.GetObjectMeta().GetAnnotations()
+
+		// Ingress?
+		isIngress, ok := ingressAnnotations["kardinal.dev.service/ingress"]
+		if ok && isIngress == trueStr {
+			clusterTopologyIngress.Ingresses = append(clusterTopologyIngress.Ingresses, ingress)
+		}
+	}
+	return clusterTopologyIngress
 }

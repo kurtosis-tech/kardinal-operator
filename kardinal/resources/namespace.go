@@ -3,6 +3,7 @@ package resources
 import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	net "k8s.io/api/networking/v1"
 	kardinalcorev1 "kardinal.dev/kardinal-operator/api/core/v1"
 )
 
@@ -10,6 +11,7 @@ type Namespace struct {
 	Name        string
 	Services    []*corev1.Service      `json:"services"`
 	Deployments []*appsv1.Deployment   `json:"deployments"`
+	Ingresses   []*net.Ingress         `json:"ingresses"`
 	Flows       []*kardinalcorev1.Flow `json:"flows"`
 }
 

@@ -4,6 +4,7 @@ go 1.22.0
 
 require (
 	github.com/brunoga/deep v1.2.4
+	github.com/dominikbraun/graph v0.23.0
 	github.com/kurtosis-tech/stacktrace v0.0.0-20211028211901-1c67a77b5409
 	github.com/onsi/ginkgo/v2 v2.19.0
 	github.com/onsi/gomega v1.33.1

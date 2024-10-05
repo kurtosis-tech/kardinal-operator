@@ -7,9 +7,14 @@ import (
 	"github.com/samber/lo"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	net "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kardinalcorev1 "kardinal.dev/kardinal-operator/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	BaselineNamespace = "baseline"
 )
 
 type Resources struct {
@@ -51,6 +56,12 @@ func getNamespaceResources(ctx context.Context, namespace string, cl client.Clie
 		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of deployments for namespace %s", namespace)
 	}
 
+	ingresses := &net.IngressList{}
+	err = cl.List(ctx, ingresses, client.InNamespace(namespace))
+	if err != nil {
+		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of ingresses for namespace %s", namespace)
+	}
+
 	flows := &kardinalcorev1.FlowList{}
 	err = cl.List(ctx, flows, client.InNamespace(namespace))
 	if err != nil {
@@ -61,6 +72,7 @@ func getNamespaceResources(ctx context.Context, namespace string, cl client.Clie
 		Name:        namespace,
 		Services:    lo.Map(services.Items, func(service corev1.Service, _ int) *corev1.Service { return &service }),
 		Deployments: lo.Map(deployments.Items, func(deployment appsv1.Deployment, _ int) *appsv1.Deployment { return &deployment }),
+		Ingresses:   lo.Map(ingresses.Items, func(ingress net.Ingress, _ int) *net.Ingress { return &ingress }),
 		Flows:       lo.Map(flows.Items, func(flow kardinalcorev1.Flow, _ int) *kardinalcorev1.Flow { return &flow }),
 	}, nil
 }
@@ -93,4 +105,11 @@ func getObjectName(obj *metav1.ObjectMeta) string {
 	}
 
 	return obj.GetName()
+}
+
+func AddAnnotations(obj *metav1.ObjectMeta, annotations map[string]string) {
+	objAnnotations := obj.Annotations
+	for key, value := range annotations {
+		objAnnotations[key] = value
+	}
 }
