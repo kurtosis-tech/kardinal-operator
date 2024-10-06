@@ -6,6 +6,7 @@ import (
 
 	"github.com/kurtosis-tech/stacktrace"
 	"github.com/samber/lo"
+	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	net "k8s.io/api/networking/v1"
@@ -16,6 +17,7 @@ import (
 
 const (
 	BaselineNamespace = "baseline"
+	trueStr           = "true"
 )
 
 type Resources struct {
@@ -128,4 +130,83 @@ func AddAnnotations(obj *metav1.ObjectMeta, annotations map[string]string) {
 	for key, value := range annotations {
 		objAnnotations[key] = value
 	}
+}
+
+// TODO: mode thos apply helper functions to the resources package
+func ApplyServiceResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
+	for _, namespace := range clusterResources.Namespaces {
+		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
+		if clusterTopologyNamespace != nil {
+			for _, service := range clusterTopologyNamespace.Services {
+				if namespace.GetService(service.Name) == nil {
+					logrus.Infof("Creating service %s", service.Name)
+					err := cl.Create(ctx, service)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred creating service %s", service.Name)
+					}
+				}
+			}
+		}
+
+		for _, service := range namespace.Services {
+			serviceAnnotations := service.Annotations
+			isManaged, found := serviceAnnotations["kardinal.dev/managed"]
+			if found && isManaged == trueStr {
+				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetService(service.Name) == nil {
+					logrus.Infof("Deleting service %s", service.Name)
+					err := cl.Delete(ctx, service)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred deleting service %s", service.Name)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func ApplyDeploymentResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
+	for _, namespace := range clusterResources.Namespaces {
+		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
+		if clusterTopologyNamespace != nil {
+			for _, deployment := range clusterTopologyNamespace.Deployments {
+				if namespace.GetDeployment(deployment.Name) == nil {
+					logrus.Infof("Creating deployment %s", deployment.Name)
+					err := cl.Create(ctx, deployment)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred creating deployment %s", deployment.Name)
+					}
+				}
+			}
+		}
+
+		for _, deployment := range namespace.Deployments {
+			deploymentAnnotations := deployment.Annotations
+			isManaged, found := deploymentAnnotations["kardinal.dev/managed"]
+			if found && isManaged == trueStr {
+				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetDeployment(deployment.Name) == nil {
+					logrus.Infof("Deleting deployment %s", deployment.Name)
+					err := cl.Delete(ctx, deployment)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred deleting deployment %s", deployment.Name)
+					}
+				}
+			} else {
+				annotationsToAdd := map[string]string{
+					"sidecar.istio.io/inject": "true",
+					// TODO: make this a flag to help debugging
+					// One can view the logs with: kubeclt logs -f -l app=<serviceID> -n <namespace> -c istio-proxy
+					"sidecar.istio.io/componentLogLevel": "lua:info",
+				}
+				AddAnnotations(&deployment.ObjectMeta, annotationsToAdd)
+				err := cl.Update(ctx, deployment)
+				if err != nil {
+					return stacktrace.Propagate(err, "An error occurred updating deployment %s", deployment.Name)
+				}
+			}
+		}
+	}
+
+	return nil
 }
