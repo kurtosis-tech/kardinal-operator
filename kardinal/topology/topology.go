@@ -18,7 +18,8 @@ import (
 )
 
 const (
-	trueStr = "true"
+	trueStr                 = "true"
+	kardinalManagedLabelKey = "kardinal-managed"
 )
 
 type ClusterTopology struct {
@@ -103,7 +104,7 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(
 				logrus.Infof("Stateful service %s is non http; its parents shall be duplicated", modifiedService.ServiceID)
 				parents := clusterTopology.FindImmediateParents(service)
 				for _, parent := range parents {
-					logrus.Infof("Duplicating parent %s", parent.ServiceID)
+					logrus.Infof("Setting parent service %s version to %s", parent.ServiceID, flowId)
 					err = clusterTopology.MoveServiceToVersion(parent, flowId)
 					if err != nil {
 						return stacktrace.Propagate(err, "An error occurred moving parent service %s to version %s", parent.ServiceID, flowId)
@@ -142,19 +143,42 @@ func (clusterTopology *ClusterTopology) UpdateDependencies(targetService *Servic
 
 func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, error) {
 	namespaces := map[string]*resources.Namespace{}
-	for _, service := range clusterTopology.Services {
-		if service.IsManaged {
-			namespace, found := namespaces[service.Namespace]
-			if !found {
-				namespaces[service.Namespace] = &resources.Namespace{
-					Name:        service.Namespace,
-					Services:    []*corev1.Service{},
-					Deployments: []*appsv1.Deployment{},
-				}
-				namespace = namespaces[service.Namespace]
+	managedServices := lo.Filter(clusterTopology.Services, func(service *Service, _ int) bool { return service.IsManaged })
+
+	var namespace *resources.Namespace
+	for _, service := range managedServices {
+		var found bool
+		namespace, found = namespaces[service.Namespace]
+		if !found {
+			namespaces[service.Namespace] = &resources.Namespace{
+				Name:        service.Namespace,
+				Services:    []*corev1.Service{},
+				Deployments: []*appsv1.Deployment{},
 			}
-			namespace.Services = append(namespace.Services, service.GetCoreV1Service(service.Namespace))
-			namespace.Deployments = append(namespace.Deployments, service.GetAppsV1Deployment(service.Namespace))
+			namespace = namespaces[service.Namespace]
+		}
+		namespace.Services = append(namespace.Services, service.GetCoreV1Service(service.Namespace))
+		namespace.Deployments = append(namespace.Deployments, service.GetAppsV1Deployment(service.Namespace))
+	}
+
+	groupedServices := lo.GroupBy(clusterTopology.Services, func(item *Service) ServiceNamespace {
+		return ServiceNamespace{ServiceID: item.ServiceID, Namespace: item.Namespace}
+	})
+	for _, services := range groupedServices {
+		if len(services) > 0 {
+			// TODO: this assumes service specs didn't change. May we need a new version to ClusterTopology data structure
+
+			// ServiceSpec is nil for external services - don't process anything bc theres nothing to add to the cluster
+			if services[0].ServiceSpec == nil {
+				continue
+			}
+			service := services[0]
+			virtualService, destinationRule := service.GetVirtualService(services)
+			namespace = namespaces[service.Namespace]
+			namespace.VirtualServices = append(namespace.VirtualServices, virtualService)
+			namespace.DestinationRules = append(namespace.DestinationRules, destinationRule)
+
+			// TODO: Add authz policies
 		}
 	}
 
@@ -180,6 +204,16 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 		return stacktrace.Propagate(err, "An error occurred applying the deployment resources")
 	}
 
+	err = resources.ApplyVirtualServiceResources(ctx, clusterResources, clusterTopologyResources, cl)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred applying the virtual service resources")
+	}
+
+	err = resources.ApplyDestinationRuleResources(ctx, clusterResources, clusterTopologyResources, cl)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred applying the virtual service resources")
+	}
+
 	return nil
 }
 
@@ -201,14 +235,9 @@ func (clusterTopology *ClusterTopology) GetGraph() graph.Graph[ServiceHash, *Ser
 }
 
 func (clusterTopology *ClusterTopology) Copy(flowId string) *ClusterTopology {
-	clusterTopologyCopy := clusterTopology
+	clusterTopologyCopy := deep.MustCopy(clusterTopology)
 	clusterTopologyCopy.FlowID = flowId
-	clusterTopologyCopy.Services = deep.MustCopy(clusterTopology.Services)
-	clusterTopologyCopy.ServiceDependencies = deep.MustCopy(clusterTopology.ServiceDependencies)
-	clusterTopology.Ingress = &Ingress{
-		ActiveFlowIDs: []string{flowId},
-		Ingresses:     deep.MustCopy(clusterTopology.Ingress.Ingresses),
-	}
+	clusterTopologyCopy.Ingress.ActiveFlowIDs = []string{flowId}
 	return clusterTopologyCopy
 }
 
@@ -257,12 +286,31 @@ func (clusterTopology *ClusterTopology) Merge(clusterTopologies []*ClusterTopolo
 		mergedClusterTopology.Ingress.ActiveFlowIDs = append(mergedClusterTopology.Ingress.ActiveFlowIDs, topology.Ingress.ActiveFlowIDs...)
 	}
 	mergedClusterTopology.Ingress.ActiveFlowIDs = lo.Uniq(mergedClusterTopology.Ingress.ActiveFlowIDs)
+	logrus.Infof("Services length: %d", len(mergedClusterTopology.Services))
 
 	// TODO improve the filtering method, we could implement the `Service.Equal` method to compare and filter the services
 	// TODO and inside this method we could use the k8s service marshall method (https://pkg.go.dev/k8s.io/api/core/v1#Service.Marsha) and also the same for other k8s fields
 	// TODO it should be faster
-	mergedClusterTopology.Services = lo.UniqBy(mergedClusterTopology.Services, mustGetMarshalledKey[*Service])
-	mergedClusterTopology.ServiceDependencies = lo.UniqBy(mergedClusterTopology.ServiceDependencies, mustGetMarshalledKey[*ServiceDependency])
+	mergedClusterTopology.Services = lo.UniqBy(mergedClusterTopology.Services, func(service *Service) ServiceVersion {
+		serviceVersion := ServiceVersion{
+			ServiceID: service.ServiceID,
+			Namespace: service.Namespace,
+			Version:   service.Version,
+		}
+		return serviceVersion
+	})
+	logrus.Infof("Services length: %d", len(mergedClusterTopology.Services))
+	mergedClusterTopology.ServiceDependencies = lo.UniqBy(mergedClusterTopology.ServiceDependencies, func(serviceDependency *ServiceDependency) ServiceDependencyVersion {
+		serviceDependencyVersion := ServiceDependencyVersion{
+			ServiceID:                 serviceDependency.Service.ServiceID,
+			Namespace:                 serviceDependency.Service.Namespace,
+			Version:                   serviceDependency.Service.Version,
+			DependOnServiceID:         serviceDependency.DependsOnService.ServiceID,
+			DependsOnServiceNamespace: serviceDependency.DependsOnService.Namespace,
+			DependsOnServiceVersion:   serviceDependency.DependsOnService.Version,
+		}
+		return serviceDependencyVersion
+	})
 
 	return mergedClusterTopology
 }
@@ -310,7 +358,6 @@ func NewClusterTopologyFromResources(
 func processServices(services []*corev1.Service, deployments []*appsv1.Deployment) ([]*Service, []*ServiceDependency, error) {
 	clusterTopologyServices := []*Service{}
 	clusterTopologyServiceDependencies := []*ServiceDependency{}
-	externalServicesDependencies := []*ServiceDependency{}
 
 	type serviceWithDependenciesAnnotation struct {
 		service                *Service
@@ -355,8 +402,6 @@ func processServices(services []*corev1.Service, deployments []*appsv1.Deploymen
 			clusterTopologyServiceDependencies = append(clusterTopologyServiceDependencies, serviceDependency)
 		}
 	}
-	// then add the external services dependencies
-	clusterTopologyServiceDependencies = append(clusterTopologyServiceDependencies, externalServicesDependencies...)
 
 	return clusterTopologyServices, clusterTopologyServiceDependencies, nil
 }

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/samber/lo"
+	"istio.io/api/networking/v1alpha3"
+	istioclient "istio.io/client-go/pkg/apis/networking/v1alpha3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,11 +35,7 @@ func (service *Service) Print() {
 }
 
 func (service *Service) GetCoreV1Service(namespace string) *corev1.Service {
-	kardinalManaged := "false"
-	if service.Version != namespace {
-		kardinalManaged = trueStr
-	}
-	return &corev1.Service{
+	coreV1Service := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
 			Kind:       "Service",
@@ -47,19 +46,20 @@ func (service *Service) GetCoreV1Service(namespace string) *corev1.Service {
 			Labels: map[string]string{
 				"app": service.ServiceID,
 			},
-			Annotations: map[string]string{
-				"kardinal.dev/managed": kardinalManaged,
-			},
 		},
 		Spec: *service.ServiceSpec,
 	}
+
+	if service.IsManaged {
+		coreV1Service.Labels[kardinalManagedLabelKey] = trueStr
+	}
+
+	return coreV1Service
 }
 
 func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment {
-	kardinalManaged := "false"
 	name := service.ServiceID
-	if service.Version != namespace {
-		kardinalManaged = trueStr
+	if service.IsManaged {
 		name = fmt.Sprintf("%s-%s", service.ServiceID, service.Version)
 	}
 	deployment := appsv1.Deployment{
@@ -74,11 +74,12 @@ func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment
 				"app":     service.ServiceID,
 				"version": service.Version,
 			},
-			Annotations: map[string]string{
-				"kardinal.dev/managed": kardinalManaged,
-			},
 		},
 		Spec: *service.DeploymentSpec,
+	}
+
+	if service.IsManaged {
+		deployment.Labels[kardinalManagedLabelKey] = trueStr
 	}
 
 	numReplicas := int32(1)
@@ -123,7 +124,7 @@ func (service *Service) IsHTTP() bool {
 
 func NewServiceFromServiceAndDeployment(coreV1Service *corev1.Service, deployment *appsv1.Deployment) *Service {
 	namespace := coreV1Service.Namespace
-	labelVersion, found := coreV1Service.Labels["kardinal.dev/version"]
+	labelVersion, found := coreV1Service.Labels["version"]
 	if !found {
 		labelVersion = namespace
 	}
@@ -149,7 +150,9 @@ func NewServiceFromServiceAndDeployment(coreV1Service *corev1.Service, deploymen
 	if ok && isShared == trueStr {
 		clusterTopologyService.IsShared = true
 	}
-	isManaged, ok := serviceAnnotations["kardinal.dev/managed"]
+
+	serviceLabels := coreV1Service.Labels
+	isManaged, ok := serviceLabels[kardinalManagedLabelKey]
 	if ok && isManaged == trueStr {
 		clusterTopologyService.IsManaged = true
 	}
@@ -187,6 +190,162 @@ func (service *Service) Hash() ServiceHash {
 	return ServiceHash(hashString)
 }
 
+func (service *Service) GetVirtualService(services []*Service) (*istioclient.VirtualService, *istioclient.DestinationRule) {
+	httpRoutes := []*v1alpha3.HTTPRoute{}
+	tcpRoutes := []*v1alpha3.TCPRoute{}
+	destinationRule := service.GetDestinationRule(services)
+
+	for _, svc := range services {
+		// TODO: Support for multiple ports
+		servicePort := &svc.ServiceSpec.Ports[0]
+		var flowHost *string
+
+		if servicePort.AppProtocol != nil && *servicePort.AppProtocol == "HTTP" {
+			httpRoutes = append(httpRoutes, svc.GetHTTPRoute(flowHost))
+		} else {
+			tcpRoutes = append(tcpRoutes, svc.GetTCPRoute())
+		}
+	}
+
+	return &istioclient.VirtualService{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "networking.istio.io/v1alpha3",
+			Kind:       "VirtualService",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      service.ServiceID,
+			Namespace: service.Namespace,
+			Annotations: map[string]string{
+				"kardinal.dev/managed": trueStr,
+			},
+		},
+		Spec: v1alpha3.VirtualService{
+			Http:  httpRoutes,
+			Tcp:   tcpRoutes,
+			Hosts: []string{service.ServiceID},
+		},
+	}, destinationRule
+}
+
+func (service *Service) GetDestinationRule(services []*Service) *istioclient.DestinationRule {
+	// TODO(shared-annotation) - we could store "shared" versions somewhere so that the pointers are the same
+	// if we do that then the render work around isn't necessary
+	subsets := lo.UniqBy(
+		lo.Map(services, func(svc *Service, _ int) *v1alpha3.Subset {
+			newSubset := &v1alpha3.Subset{
+				Name: svc.Version,
+				Labels: map[string]string{
+					"version": svc.Version,
+				},
+			}
+
+			// TODO Narrow down this configuration to only subsets created for telepresence intercepts or find a way to enable TLS for telepresence intercepts https://github.com/kurtosis-tech/kardinal-kontrol/issues/14
+			// This config is necessary for Kardinal/Telepresence (https://www.telepresence.io/) integration
+			if svc.IsManaged {
+				newTrafficPolicy := &v1alpha3.TrafficPolicy{
+					Tls: &v1alpha3.ClientTLSSettings{
+						Mode: v1alpha3.ClientTLSSettings_DISABLE,
+					},
+				}
+				newSubset.TrafficPolicy = newTrafficPolicy
+			}
+
+			return newSubset
+		}),
+		func(subset *v1alpha3.Subset) string {
+			return subset.Name
+		},
+	)
+
+	return &istioclient.DestinationRule{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "networking.istio.io/v1alpha3",
+			Kind:       "DestinationRule",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      service.ServiceID,
+			Namespace: service.Namespace,
+		},
+		Spec: v1alpha3.DestinationRule{
+			Host:    service.ServiceID,
+			Subsets: subsets,
+		},
+	}
+}
+
+func (service *Service) GetTCPRoute() *v1alpha3.TCPRoute {
+	servicePort := &service.ServiceSpec.Ports[0]
+	return &v1alpha3.TCPRoute{
+		Match: []*v1alpha3.L4MatchAttributes{{
+			Port: uint32(servicePort.Port),
+			SourceLabels: map[string]string{
+				"version": service.Version,
+			},
+		}},
+		Route: []*v1alpha3.RouteDestination{
+			{
+				Destination: &v1alpha3.Destination{
+					Host:   service.ServiceID,
+					Subset: service.Version,
+					Port: &v1alpha3.PortSelector{
+						Number: uint32(servicePort.Port),
+					},
+				},
+				Weight: 100,
+			},
+		},
+	}
+}
+
+func (service *Service) GetHTTPRoute(host *string) *v1alpha3.HTTPRoute {
+	matches := []*v1alpha3.HTTPMatchRequest{
+		{
+			Headers: map[string]*v1alpha3.StringMatch{
+				"x-kardinal-destination": {
+					MatchType: &v1alpha3.StringMatch_Exact{
+						Exact: service.ServiceID + "-" + service.Version,
+					},
+				},
+			},
+		},
+	}
+
+	if host != nil {
+		matches = append(matches, &v1alpha3.HTTPMatchRequest{
+			Headers: map[string]*v1alpha3.StringMatch{
+				"x-kardinal-destination": {
+					MatchType: &v1alpha3.StringMatch_Exact{
+						Exact: *host + "-" + service.Version,
+					},
+				},
+			},
+		})
+	}
+
+	return &v1alpha3.HTTPRoute{
+		Match: matches,
+		Route: []*v1alpha3.HTTPRouteDestination{
+			{
+				Destination: &v1alpha3.Destination{
+					Host:   service.ServiceID,
+					Subset: service.Version,
+				},
+			},
+		},
+	}
+}
+
+type ServiceNamespace struct {
+	ServiceID string
+	Namespace string
+}
+
+type ServiceVersion struct {
+	ServiceID string
+	Namespace string
+	Version   string
+}
+
 type ServiceDependency struct {
 	Service          *Service            `json:"service"`
 	DependsOnService *Service            `json:"dependsOnService"`
@@ -199,4 +358,13 @@ func (serviceDependency *ServiceDependency) Print() {
 	serviceDependency.Service.Print()
 	fmt.Println("Target")
 	serviceDependency.DependsOnService.Print()
+}
+
+type ServiceDependencyVersion struct {
+	ServiceID                 string
+	Namespace                 string
+	Version                   string
+	DependOnServiceID         string
+	DependsOnServiceNamespace string
+	DependsOnServiceVersion   string
 }
