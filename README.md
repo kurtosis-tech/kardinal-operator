@@ -14,7 +14,7 @@ make test (Run tests against local cluster)
 make run (Run operator against your local cluster)
 ```
 
-Manage custom resources with kubectl.
+Manage custom resources with kubectl:
 
 ```yaml
 apiVersion: core.kardinal.dev/v1
