@@ -149,8 +149,8 @@ func AddAnnotations(obj *metav1.ObjectMeta, annotations map[string]string) {
 	}
 }
 
-// TODO: Add create, update and delete global options
-// TODO: Refactor the Apply... functions
+// OPERATOR-TODO: Add create, update and delete global options
+// OPERATOR-TODO: Refactor the Apply... functions
 
 func ApplyServiceResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
 	for _, namespace := range clusterResources.Namespaces {
@@ -176,6 +176,8 @@ func ApplyServiceResources(ctx context.Context, clusterResources *Resources, clu
 							}
 						}
 					}
+					// OPERATOR-TODO: Set app and version labels on non-managed service if not already set.
+					// Those labels are required by Istio.
 				}
 			}
 		}
@@ -241,7 +243,7 @@ func ApplyDeploymentResources(ctx context.Context, clusterResources *Resources, 
 			/* else {
 				annotationsToAdd := map[string]string{
 					"sidecar.istio.io/inject": "true",
-					// TODO: make this a flag to help debugging
+					// KARDINAL-TODO: make this a flag to help debugging
 					// One can view the logs with: kubeclt logs -f -l app=<serviceID> -n <namespace> -c istio-proxy
 					"sidecar.istio.io/componentLogLevel": "lua:info",
 				}
