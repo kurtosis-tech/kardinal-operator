@@ -395,12 +395,3 @@ type ServiceDependencyVersion struct {
 	DependsOnServiceNamespace string
 	DependsOnServiceVersion   string
 }
-
-func getServiceByVersion(namespace string, name string, version string, services []*Service) *Service {
-	for _, service := range services {
-		if service.Namespace == namespace && service.ServiceID == name && service.Version == version {
-			return service
-		}
-	}
-	return nil
-}

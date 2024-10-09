@@ -240,7 +240,7 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 	}
 
 	// TODO: Apply ingress resources
-	/*err = resources.ApplyIngressResources(ctx, clusterResources, clusterTopologyResources, cl)
+	/* err = resources.ApplyIngressResources(ctx, clusterResources, clusterTopologyResources, cl)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the ingress resources")
 	}*/
