@@ -338,6 +338,12 @@ func ApplyIngressResources(ctx context.Context, clusterResources *Resources, clu
 		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
 		if clusterTopologyNamespace != nil {
 			for _, ingress := range clusterTopologyNamespace.Ingresses {
+				var obj client.Object
+				obj = ingress
+				switch obj := obj.(type) {
+				case *net.Ingress:
+					obj.Spec = 
+				}
 				namespaceIngress := namespace.GetService(ingress.Name)
 				if namespaceIngress == nil {
 					logrus.Infof("Creating ingress %s", ingress.Name)
@@ -363,6 +369,52 @@ func ApplyIngressResources(ctx context.Context, clusterResources *Resources, clu
 				err := cl.Delete(ctx, ingress)
 				if err != nil {
 					return stacktrace.Propagate(err, "An error occurred deleting ingress %s", ingress.Name)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func ApplyResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client, getObjectFunc func(namespace *Namespace, name string) *client.Object) error {
+	for _, namespace := range clusterResources.Namespaces {
+		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
+		if clusterTopologyNamespace != nil {
+			for _, service := range clusterTopologyNamespace.Services {
+				namespaceService := getObjectFunc(namespace, service.Name)
+				if namespaceService == nil {
+					logrus.Infof("Creating service %s", service.Name)
+					err := cl.Create(ctx, service)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred creating service %s", service.Name)
+					}
+				} else {
+					serviceLabels := service.Labels
+					isManaged, found := serviceLabels[kardinalManagedLabelKey]
+					if found && isManaged == trueStr {
+						if !reflect.DeepEqual(namespaceService.Spec, service.Spec) {
+							service.ResourceVersion = namespaceService.ResourceVersion
+							err := cl.Update(ctx, service)
+							if err != nil {
+								return stacktrace.Propagate(err, "An error occurred updating service %s", service.Name)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		for _, service := range namespace.Services {
+			serviceLabels := service.Labels
+			isManaged, found := serviceLabels[kardinalManagedLabelKey]
+			if found && isManaged == trueStr {
+				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetService(service.Name) == nil {
+					logrus.Infof("Deleting service %s", service.Name)
+					err := cl.Delete(ctx, service)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred deleting service %s", service.Name)
+					}
 				}
 			}
 		}
