@@ -20,7 +20,7 @@ import (
 const (
 	BaselineNamespace       = "baseline"
 	trueStr                 = "true"
-	kardinalManagedLabelKey = "kardinal-managed"
+	kardinalManagedLabelKey = "kardinal.dev/managed"
 )
 
 type Resources struct {
@@ -150,6 +150,7 @@ func AddAnnotations(obj *metav1.ObjectMeta, annotations map[string]string) {
 }
 
 // TODO: Add create, update and delete global options
+// TODO: Refactor the Apply... functions
 
 func ApplyServiceResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
 	for _, namespace := range clusterResources.Namespaces {
@@ -324,6 +325,44 @@ func ApplyDestinationRuleResources(ctx context.Context, clusterResources *Resour
 				err := cl.Delete(ctx, destinationRule)
 				if err != nil {
 					return stacktrace.Propagate(err, "An error occurred deleting destination rule %s", destinationRule.Name)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func ApplyIngressResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
+	for _, namespace := range clusterResources.Namespaces {
+		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
+		if clusterTopologyNamespace != nil {
+			for _, ingress := range clusterTopologyNamespace.Ingresses {
+				namespaceIngress := namespace.GetService(ingress.Name)
+				if namespaceIngress == nil {
+					logrus.Infof("Creating ingress %s", ingress.Name)
+					err := cl.Create(ctx, ingress)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred creating ingress %s", ingress.Name)
+					}
+				} else {
+					if !reflect.DeepEqual(namespaceIngress.Spec, ingress.Spec) {
+						ingress.ResourceVersion = namespaceIngress.ResourceVersion
+						err := cl.Update(ctx, ingress)
+						if err != nil {
+							return stacktrace.Propagate(err, "An error occurred updating ingress %s", ingress.Name)
+						}
+					}
+				}
+			}
+		}
+
+		for _, ingress := range namespace.Ingresses {
+			if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetIngress(ingress.Name) == nil {
+				logrus.Infof("Deleting ingress %s", ingress.Name)
+				err := cl.Delete(ctx, ingress)
+				if err != nil {
+					return stacktrace.Propagate(err, "An error occurred deleting ingress %s", ingress.Name)
 				}
 			}
 		}

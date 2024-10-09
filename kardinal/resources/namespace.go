@@ -57,3 +57,13 @@ func (namespace *Namespace) GetDestinationRule(name string) *istioclient.Destina
 
 	return nil
 }
+
+func (namespace *Namespace) GetIngress(name string) *net.Ingress {
+	for _, ingress := range namespace.Ingresses {
+		if ingress.Name == name {
+			return ingress
+		}
+	}
+
+	return nil
+}

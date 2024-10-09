@@ -19,7 +19,9 @@ import (
 
 const (
 	trueStr                 = "true"
-	kardinalManagedLabelKey = "kardinal-managed"
+	kardinalManagedLabelKey = "kardinal.dev/managed"
+	appLabelKey             = "app"
+	versionLabelKey         = "version"
 )
 
 type ClusterTopology struct {
@@ -41,14 +43,24 @@ func (clusterTopology *ClusterTopology) Print() {
 	}
 }
 
-func (clusterTopology *ClusterTopology) GetService(serviceName string, namespace string) (*Service, error) {
+func (clusterTopology *ClusterTopology) GetServiceByName(namespace string, name string) *Service {
 	for _, service := range clusterTopology.Services {
-		if service.Namespace == namespace && service.ServiceID == serviceName {
-			return service, nil
+		if service.Namespace == namespace && service.ServiceID == name {
+			return service
 		}
 	}
 
-	return nil, stacktrace.NewError("Service %s not found in the list of services", serviceName)
+	return nil
+}
+
+func (clusterTopology *ClusterTopology) GetServiceByVersion(namespace string, name string, version string) *Service {
+	for _, service := range clusterTopology.Services {
+		if service.Namespace == namespace && service.ServiceID == name && service.Version == version {
+			return service
+		}
+	}
+
+	return nil
 }
 
 func (clusterTopology *ClusterTopology) UpdateWithFlow(
@@ -141,24 +153,24 @@ func (clusterTopology *ClusterTopology) UpdateDependencies(targetService *Servic
 	}
 }
 
-func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, error) {
-	namespaces := map[string]*resources.Namespace{}
-	managedServices := lo.Filter(clusterTopology.Services, func(service *Service, _ int) bool { return service.IsManaged })
+func (clusterTopology *ClusterTopology) GetNamespaces() []string {
+	return lo.Uniq(lo.Map(clusterTopology.Services, func(service *Service, _ int) string { return service.Namespace }))
+}
 
-	var namespace *resources.Namespace
-	for _, service := range managedServices {
-		var found bool
-		namespace, found = namespaces[service.Namespace]
-		if !found {
-			namespaces[service.Namespace] = &resources.Namespace{
-				Name:        service.Namespace,
-				Services:    []*corev1.Service{},
-				Deployments: []*appsv1.Deployment{},
-			}
-			namespace = namespaces[service.Namespace]
+func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, error) {
+	resourceNamespaces := map[string]*resources.Namespace{}
+	clusterTopologyNamespaces := clusterTopology.GetNamespaces()
+	for _, clusterTopologyNamespace := range clusterTopologyNamespaces {
+		resourceNamespaces[clusterTopologyNamespace] = &resources.Namespace{
+			Name: clusterTopologyNamespace,
 		}
-		namespace.Services = append(namespace.Services, service.GetCoreV1Service(service.Namespace))
-		namespace.Deployments = append(namespace.Deployments, service.GetAppsV1Deployment(service.Namespace))
+	}
+
+	managedServices := lo.Filter(clusterTopology.Services, func(service *Service, _ int) bool { return service.IsManaged })
+	for _, service := range managedServices {
+		resourceNamespace := resourceNamespaces[service.Namespace]
+		resourceNamespace.Services = append(resourceNamespace.Services, service.GetCoreV1Service())
+		resourceNamespace.Deployments = append(resourceNamespace.Deployments, service.GetAppsV1Deployment(service.Namespace))
 	}
 
 	groupedServices := lo.GroupBy(clusterTopology.Services, func(item *Service) ServiceNamespace {
@@ -174,16 +186,29 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 			}
 			service := services[0]
 			virtualService, destinationRule := service.GetVirtualService(services)
-			namespace = namespaces[service.Namespace]
-			namespace.VirtualServices = append(namespace.VirtualServices, virtualService)
-			namespace.DestinationRules = append(namespace.DestinationRules, destinationRule)
+			resourceNamespace := resourceNamespaces[service.Namespace]
+			resourceNamespace.VirtualServices = append(resourceNamespace.VirtualServices, virtualService)
+			resourceNamespace.DestinationRules = append(resourceNamespace.DestinationRules, destinationRule)
 
 			// TODO: Add authz policies
 		}
 	}
 
+	ingresses, frontServices := clusterTopology.GetNetIngresses()
+	groupedIngresses := lo.GroupBy(ingresses, func(ingress *net.Ingress) string {
+		return ingress.Namespace
+	})
+	for namespace, ingresses := range groupedIngresses {
+		resourceNamespace := resourceNamespaces[namespace]
+		resourceNamespace.Ingresses = append(resourceNamespace.Ingresses, ingresses...)
+	}
+	for _, frontService := range frontServices {
+		resourceNamespace := resourceNamespaces[frontService.Namespace]
+		resourceNamespace.Services = append(resourceNamespace.Services, frontService)
+	}
+
 	clusterTopologyResources := &resources.Resources{
-		Namespaces: lo.Values(namespaces),
+		Namespaces: lo.Values(resourceNamespaces),
 	}
 	return clusterTopologyResources, nil
 }
@@ -213,6 +238,12 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the virtual service resources")
 	}
+
+	// TODO: Apply ingress resources
+	/*err = resources.ApplyIngressResources(ctx, clusterResources, clusterTopologyResources, cl)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred applying the ingress resources")
+	}*/
 
 	return nil
 }
@@ -315,6 +346,62 @@ func (clusterTopology *ClusterTopology) Merge(clusterTopologies []*ClusterTopolo
 	return mergedClusterTopology
 }
 
+// We assume that net.Ingress objects have a namespace defined
+func (clusterTopology *ClusterTopology) GetNetIngresses() ([]*net.Ingress, []*corev1.Service) {
+	ingressList := []*net.Ingress{}
+	frontServices := map[string]*corev1.Service{}
+
+	for _, ingressSpecOriginal := range clusterTopology.Ingress.Ingresses {
+		ingressDefinition := ingressSpecOriginal.DeepCopy()
+		namespace := ingressDefinition.Namespace
+		newRules := []net.IngressRule{}
+
+		for _, ruleOriginal := range ingressDefinition.Spec.Rules {
+			for _, activeFlowID := range clusterTopology.Ingress.ActiveFlowIDs {
+				logrus.Infof("Setting gateway route for active flow ID: %v", activeFlowID)
+				newPaths := []net.HTTPIngressPath{}
+				rule := ruleOriginal.DeepCopy()
+				flowHostname := replaceOrAddSubdomain(rule.Host, activeFlowID)
+				rule.Host = flowHostname
+
+				for _, pathOriginal := range ruleOriginal.HTTP.Paths {
+					target := clusterTopology.GetServiceByVersion(namespace, pathOriginal.Backend.Service.Name, activeFlowID)
+					// fallback to baseline if backend not found at the active flow
+					// the baseline topology (or prod topology) flow ID and flow version are equal to the namespace these three should use same value
+					baselineFlowVersion := namespace
+					if target == nil {
+						target = clusterTopology.GetServiceByVersion(namespace, pathOriginal.Backend.Service.Name, baselineFlowVersion)
+					}
+					if target != nil {
+						path := *pathOriginal.DeepCopy()
+						idVersion := fmt.Sprintf("%s-%s", target.ServiceID, activeFlowID)
+						_, serviceAlreadyAdded := frontServices[idVersion]
+						if !serviceAlreadyAdded {
+							frontServices[idVersion] = target.GetVersionedService(activeFlowID, namespace)
+							path.Backend.Service.Name = idVersion
+							newPaths = append(newPaths, path)
+						}
+					} else {
+						logrus.Errorf("Backend service %s for Ingress %s not found", pathOriginal.Backend.Service.Name, ingressDefinition.Name)
+					}
+				}
+				rule.HTTP.Paths = newPaths
+				newRules = append(newRules, *rule)
+			}
+		}
+
+		ingressDefinition.Spec.Rules = newRules
+
+		if ingressDefinition.Namespace == "" {
+			ingressDefinition.Namespace = namespace
+		}
+
+		ingressList = append(ingressList, ingressDefinition)
+	}
+
+	return ingressList, lo.Values(frontServices)
+}
+
 func NewClusterTopologyFromResources(
 	clusterResources *resources.Resources,
 ) (*ClusterTopology, error) {
@@ -366,6 +453,10 @@ func processServices(services []*corev1.Service, deployments []*appsv1.Deploymen
 	serviceWithDependencies := []*serviceWithDependenciesAnnotation{}
 
 	for _, service := range services {
+		if resources.IsManaged(&service.ObjectMeta) {
+			continue
+		}
+
 		serviceAnnotations := service.GetObjectMeta().GetAnnotations()
 
 		// 1- Service

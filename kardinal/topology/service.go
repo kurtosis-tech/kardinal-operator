@@ -34,7 +34,7 @@ func (service *Service) Print() {
 	fmt.Printf("\tManaged: %t\n", service.IsManaged)
 }
 
-func (service *Service) GetCoreV1Service(namespace string) *corev1.Service {
+func (service *Service) GetCoreV1Service() *corev1.Service {
 	coreV1Service := &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
@@ -42,9 +42,9 @@ func (service *Service) GetCoreV1Service(namespace string) *corev1.Service {
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      service.ServiceID,
-			Namespace: namespace,
+			Namespace: service.Namespace,
 			Labels: map[string]string{
-				"app": service.ServiceID,
+				appLabelKey: service.ServiceID,
 			},
 		},
 		Spec: *service.ServiceSpec,
@@ -71,8 +71,8 @@ func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
-				"app":     service.ServiceID,
-				"version": service.Version,
+				appLabelKey:     service.ServiceID,
+				versionLabelKey: service.Version,
 			},
 		},
 		Spec: *service.DeploymentSpec,
@@ -86,8 +86,8 @@ func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment
 	deployment.Spec.Replicas = int32Ptr(numReplicas)
 	deployment.Spec.Selector = &metav1.LabelSelector{
 		MatchLabels: map[string]string{
-			"app":     service.ServiceID,
-			"version": service.Version,
+			appLabelKey:     service.ServiceID,
+			versionLabelKey: service.Version,
 		},
 	}
 	vol25pct := intstr.FromString("25%")
@@ -106,8 +106,8 @@ func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment
 			"sidecar.istio.io/componentLogLevel": "lua:info",
 		},
 		Labels: map[string]string{
-			"app":     service.ServiceID,
-			"version": service.Version,
+			appLabelKey:     service.ServiceID,
+			versionLabelKey: service.Version,
 		},
 	}
 
@@ -123,15 +123,14 @@ func (service *Service) IsHTTP() bool {
 }
 
 func NewServiceFromServiceAndDeployment(coreV1Service *corev1.Service, deployment *appsv1.Deployment) *Service {
-	namespace := coreV1Service.Namespace
-	labelVersion, found := coreV1Service.Labels["version"]
+	version, found := coreV1Service.Labels[versionLabelKey]
 	if !found {
-		labelVersion = namespace
+		version = coreV1Service.Namespace
 	}
 	clusterTopologyService := &Service{
 		ServiceID:   coreV1Service.Name,
 		Namespace:   coreV1Service.Namespace,
-		Version:     labelVersion,
+		Version:     version,
 		ServiceSpec: &coreV1Service.Spec,
 	}
 	if deployment != nil {
@@ -235,7 +234,7 @@ func (service *Service) GetDestinationRule(services []*Service) *istioclient.Des
 			newSubset := &v1alpha3.Subset{
 				Name: svc.Version,
 				Labels: map[string]string{
-					"version": svc.Version,
+					versionLabelKey: svc.Version,
 				},
 			}
 
@@ -279,7 +278,7 @@ func (service *Service) GetTCPRoute() *v1alpha3.TCPRoute {
 		Match: []*v1alpha3.L4MatchAttributes{{
 			Port: uint32(servicePort.Port),
 			SourceLabels: map[string]string{
-				"version": service.Version,
+				versionLabelKey: service.Version,
 			},
 		}},
 		Route: []*v1alpha3.RouteDestination{
@@ -335,6 +334,34 @@ func (service *Service) GetHTTPRoute(host *string) *v1alpha3.HTTPRoute {
 	}
 }
 
+func (service *Service) GetVersionedService(flowVersion string, namespace string) *corev1.Service {
+	serviceSpecCopy := service.ServiceSpec.DeepCopy()
+
+	serviceSpecCopy.ClusterIP = ""
+	serviceSpecCopy.ClusterIPs = []string{}
+	serviceSpecCopy.Selector = map[string]string{
+		appLabelKey:     service.ServiceID,
+		versionLabelKey: service.Version,
+	}
+
+	return &corev1.Service{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Service",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-%s", service.ServiceID, flowVersion),
+			Namespace: namespace,
+			Labels: map[string]string{
+				appLabelKey:             service.ServiceID,
+				versionLabelKey:         flowVersion,
+				kardinalManagedLabelKey: trueStr,
+			},
+		},
+		Spec: *serviceSpecCopy,
+	}
+}
+
 type ServiceNamespace struct {
 	ServiceID string
 	Namespace string
@@ -367,4 +394,13 @@ type ServiceDependencyVersion struct {
 	DependOnServiceID         string
 	DependsOnServiceNamespace string
 	DependsOnServiceVersion   string
+}
+
+func getServiceByVersion(namespace string, name string, version string, services []*Service) *Service {
+	for _, service := range services {
+		if service.Namespace == namespace && service.ServiceID == name && service.Version == version {
+			return service
+		}
+	}
+	return nil
 }

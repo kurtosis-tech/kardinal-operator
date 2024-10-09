@@ -37,8 +37,8 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 			flowTopology := baseClusterTopology.Copy(flow.Name)
 			clusterGraph := flowTopology.GetGraph()
 
-			service, err := baseClusterTopology.GetService(flow.Spec.Service, namespace.Name)
-			if err != nil {
+			service := baseClusterTopology.GetServiceByName(namespace.Name, flow.Spec.Service)
+			if service == nil {
 				return stacktrace.Propagate(err, "An error occurred retrieving base cluster topology service %s in namespace %s", flow.Spec.Service, namespace.Name)
 			}
 			deployment := resources.GetDeploymentFromName(service.ServiceID, namespace.Deployments)
@@ -46,15 +46,15 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 			deploymentCopy.Spec.Template.Spec.Containers[0].Image = flow.Spec.Image
 			err = flowTopology.UpdateWithFlow(clusterGraph, flow.Name, service, &deploymentCopy.Spec)
 			if err != nil {
-				return stacktrace.Propagate(err, "An error occurred updating the base cluster topology with flow %s", flow.Name)
+				return stacktrace.NewError("An error occurred updating the base cluster topology with flow %s", flow.Name)
 			}
 
 			// Replace "baseline" version services with baseClusterTopology versions
 			for idx, service := range flowTopology.Services {
 				if !service.IsManaged {
-					baseService, err := baseClusterTopology.GetService(service.ServiceID, service.Namespace)
-					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred retrieving the baseline service %s", service.ServiceID)
+					baseService := baseClusterTopology.GetServiceByName(service.Namespace, service.ServiceID)
+					if baseService == nil {
+						return stacktrace.NewError("An error occurred retrieving the baseline service %s", service.ServiceID)
 					}
 					flowTopology.Services[idx] = baseService
 				}
@@ -63,16 +63,16 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 			// Update service dependencies
 			for idx, dependency := range flowTopology.ServiceDependencies {
 				if !dependency.Service.IsManaged {
-					baseService, err := baseClusterTopology.GetService(dependency.Service.ServiceID, dependency.Service.Namespace)
-					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred retrieving the baseline service %s for dependency %s", service.ServiceID, dependency.Service.ServiceID)
+					baseService := baseClusterTopology.GetServiceByName(dependency.Service.Namespace, dependency.Service.ServiceID)
+					if baseService == nil {
+						return stacktrace.NewError("An error occurred retrieving the baseline service %s for dependency %s", service.ServiceID, dependency.Service.ServiceID)
 					}
 					flowTopology.ServiceDependencies[idx].Service = baseService
 				}
 				if !dependency.DependsOnService.IsManaged {
-					baseDependsOnService, err := baseClusterTopology.GetService(dependency.DependsOnService.ServiceID, dependency.DependsOnService.Namespace)
-					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred retrieving the baseline service %s for depends on", dependency.DependsOnService.ServiceID)
+					baseDependsOnService := baseClusterTopology.GetServiceByName(dependency.DependsOnService.Namespace, dependency.DependsOnService.ServiceID)
+					if baseDependsOnService == nil {
+						return stacktrace.NewError("An error occurred retrieving the baseline service %s for depends on", dependency.DependsOnService.ServiceID)
 					}
 					flowTopology.ServiceDependencies[idx].DependsOnService = baseDependsOnService
 				}
