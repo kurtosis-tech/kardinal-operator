@@ -63,6 +63,16 @@ func (clusterTopology *ClusterTopology) GetServiceByVersion(namespace string, na
 	return nil
 }
 
+func (clusterTopology *ClusterTopology) GetBaselineFlowService(namespace string, name string) *Service {
+	for _, service := range clusterTopology.Services {
+		if service.Namespace == namespace && service.ServiceID == name && service.IsManaged == false {
+			return service
+		}
+	}
+
+	return nil
+}
+
 func (clusterTopology *ClusterTopology) UpdateWithFlow(
 	clusterGraph graph.Graph[ServiceHash, *Service],
 	flowId string,
@@ -365,10 +375,8 @@ func (clusterTopology *ClusterTopology) GetNetIngresses() ([]*net.Ingress, []*co
 				for _, pathOriginal := range ruleOriginal.HTTP.Paths {
 					target := clusterTopology.GetServiceByVersion(namespace, pathOriginal.Backend.Service.Name, activeFlowID)
 					// fallback to baseline if backend not found at the active flow
-					// the baseline topology (or prod topology) flow ID and flow version are equal to the namespace these three should use same value
-					baselineFlowVersion := namespace
 					if target == nil {
-						target = clusterTopology.GetServiceByVersion(namespace, pathOriginal.Backend.Service.Name, baselineFlowVersion)
+						target = clusterTopology.GetBaselineFlowService(namespace, pathOriginal.Backend.Service.Name)
 					}
 					if target != nil {
 						path := *pathOriginal.DeepCopy()
