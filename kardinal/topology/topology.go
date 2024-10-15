@@ -365,7 +365,10 @@ func (clusterTopology *ClusterTopology) GetNetIngresses() ([]*net.Ingress, []*co
 				for _, pathOriginal := range ruleOriginal.HTTP.Paths {
 					target := clusterTopology.GetServiceByVersion(namespace, pathOriginal.Backend.Service.Name, activeFlowID)
 					// fallback to baseline if backend not found at the active flow
-					// the baseline topology (or prod topology) flow ID and flow version are equal to the namespace these three should use same value
+					//OPERATOR-TODO
+					// the baseline topology (or prod topology) flow ID and flow version are equal to the namespace these three should use same value //TODO this doesn't apply for the current approach
+					//TODO with Kardinal-Kontrol the baselineFlowVersion and namespace where equal because Kontrol modify the Service's metadata like the 'version' label
+					//TODO we need to find a way to get the real version, not modified
 					baselineFlowVersion := namespace
 					if target == nil {
 						target = clusterTopology.GetServiceByVersion(namespace, pathOriginal.Backend.Service.Name, baselineFlowVersion)
