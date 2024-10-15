@@ -65,7 +65,7 @@ func (clusterTopology *ClusterTopology) GetServiceByVersion(namespace string, na
 
 func (clusterTopology *ClusterTopology) GetBaselineFlowService(namespace string, name string) *Service {
 	for _, service := range clusterTopology.Services {
-		if service.Namespace == namespace && service.ServiceID == name && service.IsManaged == false {
+		if service.Namespace == namespace && service.ServiceID == name && !service.IsManaged {
 			return service
 		}
 	}
