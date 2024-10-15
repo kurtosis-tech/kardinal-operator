@@ -34,8 +34,17 @@ spec:
 ```
 
 ```
-kubectl create -f flow.yaml
-kubectl delete -f flow.yaml
+# Create a flow 
+kubectl create -f ./ci/flow-test.yaml
+
+# Delete a flow
+kubectl delete -f ./ci/flow-test.yaml
+
+# Get all flows in namespace
+kubectl get flows -n baseline
+
+# Describe a flow by its name 
+kubectl describe flows flow-test -n baseline
 ```
 
 Deploy the operator inside the cluster
