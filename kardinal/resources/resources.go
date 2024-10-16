@@ -176,8 +176,6 @@ func ApplyServiceResources(ctx context.Context, clusterResources *Resources, clu
 							}
 						}
 					}
-					// OPERATOR-TODO: Set app and version labels on non-managed service if not already set.
-					// Those labels are required by Istio.
 				}
 			}
 		}
