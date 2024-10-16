@@ -19,6 +19,8 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	k8scorev1 "k8s.io/api/core/v1"
+	"kardinal.dev/kardinal-operator/kardinal/webhooks"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -150,6 +152,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create flow controller", "controller", "Flow")
+		os.Exit(1)
+	}
+
+	if err := builder.WebhookManagedBy(mgr).
+		For(&k8scorev1.Service{}).
+		WithDefaulter(&webhooks.IstioLabelsDefaulter{}).
+		Complete(); err != nil {
+		setupLog.Error(err, "unable to create the Istio labels defaulter webhook")
 		os.Exit(1)
 	}
 
