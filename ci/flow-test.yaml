@@ -1,0 +1,11 @@
+apiVersion: core.kardinal.dev/v1
+kind: Flow
+metadata:
+  labels:
+    app.kubernetes.io/name: kardinal
+    app.kubernetes.io/managed-by: kustomize
+  name: flow-test
+  namespace: baseline
+spec:
+  service: frontend
+  image: kurtosistech/frontend:demo-frontend
