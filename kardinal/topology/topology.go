@@ -176,6 +176,12 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 		}
 	}
 
+	for _, service := range clusterTopology.Services {
+		envoyFiltersForService := service.GetEnvoyFilters()
+		resourceNamespace := resourceNamespaces[service.Namespace]
+		resourceNamespace.EnvoyFilters = append(resourceNamespace.EnvoyFilters, envoyFiltersForService...)
+	}
+
 	managedServices := lo.Filter(clusterTopology.Services, func(service *Service, _ int) bool { return service.IsManaged })
 	for _, service := range managedServices {
 		resourceNamespace := resourceNamespaces[service.Namespace]
@@ -246,7 +252,7 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 
 	err = resources.ApplyDestinationRuleResources(ctx, clusterResources, clusterTopologyResources, cl)
 	if err != nil {
-		return stacktrace.Propagate(err, "An error occurred applying the virtual service resources")
+		return stacktrace.Propagate(err, "An error occurred applying the destination rule resources")
 	}
 
 	// OPERATOR-TODO: Apply ingress resources
@@ -254,6 +260,11 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the ingress resources")
 	}*/
+
+	err = resources.ApplyEnvoyFilterResources(ctx, clusterResources, clusterTopologyResources, cl)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred applying the Envoy filter resources")
+	}
 
 	return nil
 }

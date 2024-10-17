@@ -10,12 +10,13 @@ import (
 
 type Namespace struct {
 	Name             string
-	Services         []*corev1.Service    `json:"services"`
-	Deployments      []*appsv1.Deployment `json:"deployments"`
-	Ingresses        []*net.Ingress       `json:"ingresses"`
-	VirtualServices  []*istioclient.VirtualService
-	DestinationRules []*istioclient.DestinationRule
-	Flows            []*kardinalcorev1.Flow `json:"flows"`
+	Services         []*corev1.Service              `json:"services"`
+	Deployments      []*appsv1.Deployment           `json:"deployments"`
+	Ingresses        []*net.Ingress                 `json:"ingresses"`
+	VirtualServices  []*istioclient.VirtualService  `json:"virtualServices"`
+	DestinationRules []*istioclient.DestinationRule `json:"destinationRules"`
+	EnvoyFilters     []*istioclient.EnvoyFilter     `json:"envoy_filters"`
+	Flows            []*kardinalcorev1.Flow         `json:"flows"`
 }
 
 func (namespace *Namespace) GetService(name string) *corev1.Service {
@@ -52,6 +53,16 @@ func (namespace *Namespace) GetDestinationRule(name string) *istioclient.Destina
 	for _, destinationRule := range namespace.DestinationRules {
 		if destinationRule.Name == name {
 			return destinationRule
+		}
+	}
+
+	return nil
+}
+
+func (namespace *Namespace) GetEnvoyFilter(name string) *istioclient.EnvoyFilter {
+	for _, filter := range namespace.EnvoyFilters {
+		if filter.Name == name {
+			return filter
 		}
 	}
 

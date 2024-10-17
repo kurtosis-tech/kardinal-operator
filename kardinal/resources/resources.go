@@ -107,6 +107,12 @@ func getNamespaceResources(ctx context.Context, namespace string, cl client.Clie
 		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of destination rules for namespace %s", namespace)
 	}
 
+	envoyFilters := &istioclient.EnvoyFilterList{}
+	err = cl.List(ctx, envoyFilters, client.InNamespace(namespace))
+	if err != nil {
+		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of envoy filters for namespace %s", namespace)
+	}
+
 	flows := &kardinalcorev1.FlowList{}
 	err = cl.List(ctx, flows, client.InNamespace(namespace))
 	if err != nil {
@@ -375,6 +381,45 @@ func ApplyIngressResources(ctx context.Context, clusterResources *Resources, clu
 				err := cl.Delete(ctx, ingress)
 				if err != nil {
 					return stacktrace.Propagate(err, "An error occurred deleting ingress %s", ingress.Name)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// OPERATOR-TODO check why we have duplicated values, and make sure to create the filters for the flow services I think right now this generates the duplication because both have same name
+func ApplyEnvoyFilterResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
+	for _, namespace := range clusterResources.Namespaces {
+		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
+		if clusterTopologyNamespace != nil {
+			for _, envoyFilter := range clusterTopologyNamespace.EnvoyFilters {
+				namespaceEnvoyFilter := namespace.GetEnvoyFilter(envoyFilter.Name)
+				if namespaceEnvoyFilter == nil {
+					logrus.Infof("Creating envoy filter %s", envoyFilter.Name)
+					err := cl.Create(ctx, envoyFilter)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred creating envoy filter %s", envoyFilter.Name)
+					}
+				} else {
+					if !reflect.DeepEqual(&namespaceEnvoyFilter.Spec, &envoyFilter.Spec) {
+						envoyFilter.ResourceVersion = namespaceEnvoyFilter.ResourceVersion
+						err := cl.Update(ctx, envoyFilter)
+						if err != nil {
+							return stacktrace.Propagate(err, "An error occurred updating envoy filter %s", envoyFilter.Name)
+						}
+					}
+				}
+			}
+		}
+
+		for _, envoyFilter := range namespace.EnvoyFilters {
+			if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetEnvoyFilter(envoyFilter.Name) == nil {
+				logrus.Infof("Deleting envoy filter %s", envoyFilter.Name)
+				err := cl.Delete(ctx, envoyFilter)
+				if err != nil {
+					return stacktrace.Propagate(err, "An error occurred deleting envoy filter %s", envoyFilter.Name)
 				}
 			}
 		}

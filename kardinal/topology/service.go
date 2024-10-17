@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/samber/lo"
+	"google.golang.org/protobuf/types/known/structpb"
 	"istio.io/api/networking/v1alpha3"
 	istioclient "istio.io/client-go/pkg/apis/networking/v1alpha3"
 	appsv1 "k8s.io/api/apps/v1"
@@ -13,6 +15,94 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
+
+const (
+	inboundRequestTraceIDFilter = `
+function envoy_on_request(request_handle)
+  local headers = request_handle:headers()
+  local trace_id = headers:get("x-kardinal-trace-id")
+  
+  if not trace_id then
+    request_handle:respond(
+      {[":status"] = "400"},
+      "Missing required x-kardinal-trace-id header"
+    )
+  end
+end
+`
+
+	outgoingRequestTraceIDFilterTemplate = `
+%s
+
+function get_trace_id(headers)
+  for _, header_name in ipairs(trace_header_priorities) do
+    local trace_id = headers:get(header_name)
+    if trace_id then
+      return trace_id, header_name
+    end
+  end
+
+  return nil, nil
+end
+
+function envoy_on_request(request_handle)
+  local headers = request_handle:headers()
+  local trace_id, source_header = get_trace_id(headers)
+  local hostname = headers:get(":authority")
+  
+  if not trace_id then
+    request_handle:logWarn("No valid trace ID found in request headers")
+    request_handle:respond(
+      {[":status"] = "400"},
+      "Missing required trace ID header"
+    )
+    return
+  end
+
+  if source_header ~= "x-kardinal-trace-id" then
+    request_handle:headers():add("x-kardinal-trace-id", trace_id)
+    request_handle:logInfo("Set x-kardinal-trace-id from " .. source_header .. ": " .. trace_id)
+  end
+
+  local destination = determine_destination(request_handle, trace_id, hostname)
+  request_handle:headers():add("x-kardinal-destination", destination)
+end
+
+function determine_destination(request_handle, trace_id, hostname)
+  hostname = hostname:match("^([^:]+)")
+  local headers, body = request_handle:httpCall(
+    "outbound|8080||trace-router.default.svc.cluster.local",
+    {
+      [":method"] = "GET",
+      [":path"] = "/route?trace_id=" .. trace_id .. "&hostname=" .. hostname .. "&baseline_prefix=%s",
+      [":authority"] = "trace-router.default.svc.cluster.local"
+    },
+    "",
+    5000
+  )
+  
+  if not headers or headers[":status"] ~= "200" then
+    request_handle:logWarn("Failed to determine destination, falling back to baseline")
+    return hostname .. "-%s"  -- Fallback to baseline
+  end
+  
+  return body
+end
+`
+
+	luaFilterType = "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua"
+)
+
+var TraceHeaderPriorities = []string{
+	"x-kardinal-trace-id",   // Our custom header (checked first)
+	"x-b3-traceid",          // Zipkin B3
+	"x-request-id",          // General request ID, often used for tracing
+	"x-cloud-trace-context", // Google Cloud Trace
+	"x-amzn-trace-id",       // AWS X-Ray
+	"traceparent",           // W3C Trace Context
+	"uber-trace-id",         // Jaeger
+	"x-datadog-trace-id",    // Datadog
+}
 
 type Service struct {
 	ServiceID               string                 `json:"serviceID"`
@@ -360,6 +450,141 @@ func (service *Service) GetVersionedService(flowVersion string, namespace string
 		},
 		Spec: *serviceSpecCopy,
 	}
+}
+
+// OPERATOR-TODO update this once we include the Kubernetes Gateway API
+func (service *Service) GetEnvoyFilters() []*istioclient.EnvoyFilter {
+	namespace := service.Namespace
+
+	if !service.IsHTTP() {
+		return []*istioclient.EnvoyFilter{}
+	}
+	inboundFilter := &istioclient.EnvoyFilter{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "networking.istio.io/v1alpha3",
+			Kind:       "EnvoyFilter",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-inbound-trace-id-check", service.ServiceID),
+			Namespace: namespace,
+		},
+		Spec: v1alpha3.EnvoyFilter{
+			WorkloadSelector: &v1alpha3.WorkloadSelector{
+				Labels: map[string]string{
+					"app": service.ServiceID,
+				},
+			},
+			ConfigPatches: []*v1alpha3.EnvoyFilter_EnvoyConfigObjectPatch{
+				{
+					ApplyTo: v1alpha3.EnvoyFilter_HTTP_FILTER,
+					Match: &v1alpha3.EnvoyFilter_EnvoyConfigObjectMatch{
+						Context: v1alpha3.EnvoyFilter_SIDECAR_INBOUND,
+						ObjectTypes: &v1alpha3.EnvoyFilter_EnvoyConfigObjectMatch_Listener{
+							Listener: &v1alpha3.EnvoyFilter_ListenerMatch{
+								FilterChain: &v1alpha3.EnvoyFilter_ListenerMatch_FilterChainMatch{
+									Filter: &v1alpha3.EnvoyFilter_ListenerMatch_FilterMatch{
+										Name: "envoy.filters.network.http_connection_manager",
+									},
+								},
+							},
+						},
+					},
+					Patch: &v1alpha3.EnvoyFilter_Patch{
+						Operation: v1alpha3.EnvoyFilter_Patch_INSERT_BEFORE,
+						Value: &structpb.Struct{
+							Fields: map[string]*structpb.Value{
+								"name": {Kind: &structpb.Value_StringValue{StringValue: "envoy.lua"}},
+								"typed_config": {
+									Kind: &structpb.Value_StructValue{
+										StructValue: &structpb.Struct{
+											Fields: map[string]*structpb.Value{
+												"@type":      {Kind: &structpb.Value_StringValue{StringValue: luaFilterType}},
+												"inlineCode": {Kind: &structpb.Value_StringValue{StringValue: inboundRequestTraceIDFilter}},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// the baseline topology (or prod topology) flow ID and flow version and host are equal to the namespace these four should use same value
+	baselineHostName := namespace
+	outboundFilter := &istioclient.EnvoyFilter{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "networking.istio.io/v1alpha3",
+			Kind:       "EnvoyFilter",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-outbound-trace-router", service.ServiceID),
+			Namespace: namespace,
+		},
+		Spec: v1alpha3.EnvoyFilter{
+			WorkloadSelector: &v1alpha3.WorkloadSelector{
+				Labels: map[string]string{
+					"app": service.ServiceID,
+				},
+			},
+			ConfigPatches: []*v1alpha3.EnvoyFilter_EnvoyConfigObjectPatch{
+				{
+					ApplyTo: v1alpha3.EnvoyFilter_HTTP_FILTER,
+					Match: &v1alpha3.EnvoyFilter_EnvoyConfigObjectMatch{
+						Context: v1alpha3.EnvoyFilter_SIDECAR_OUTBOUND,
+						ObjectTypes: &v1alpha3.EnvoyFilter_EnvoyConfigObjectMatch_Listener{
+							Listener: &v1alpha3.EnvoyFilter_ListenerMatch{
+								FilterChain: &v1alpha3.EnvoyFilter_ListenerMatch_FilterChainMatch{
+									Filter: &v1alpha3.EnvoyFilter_ListenerMatch_FilterMatch{
+										Name: "envoy.filters.network.http_connection_manager",
+									},
+								},
+							},
+						},
+					},
+					Patch: &v1alpha3.EnvoyFilter_Patch{
+						Operation: v1alpha3.EnvoyFilter_Patch_INSERT_BEFORE,
+						Value: &structpb.Struct{
+							Fields: map[string]*structpb.Value{
+								"name": {Kind: &structpb.Value_StringValue{StringValue: "envoy.lua"}},
+								"typed_config": {
+									Kind: &structpb.Value_StructValue{
+										StructValue: &structpb.Struct{
+											Fields: map[string]*structpb.Value{
+												"@type":      {Kind: &structpb.Value_StringValue{StringValue: luaFilterType}},
+												"inlineCode": {Kind: &structpb.Value_StringValue{StringValue: getOutgoingRequestTraceIDFilter(baselineHostName)}},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return []*istioclient.EnvoyFilter{inboundFilter, outboundFilter}
+}
+
+func getOutgoingRequestTraceIDFilter(baselineHostName string) string {
+	return fmt.Sprintf(outgoingRequestTraceIDFilterTemplate, generateLuaTraceHeaderPriorities(), baselineHostName, baselineHostName)
+}
+
+func generateLuaTraceHeaderPriorities() string {
+	var sb strings.Builder
+	sb.WriteString("local trace_header_priorities = {")
+	for i, header := range TraceHeaderPriorities {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(fmt.Sprintf("%q", header))
+	}
+	sb.WriteString("}")
+	return sb.String()
 }
 
 type ServiceNamespace struct {
