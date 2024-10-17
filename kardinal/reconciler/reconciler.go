@@ -20,6 +20,11 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred retrieving the list of resources")
 	}
+
+	if err := resources.InjectIstioLabelsInServicesAndDeployments(ctx, cl, clusterResources); err != nil {
+		return stacktrace.Propagate(err, "An error occurred injecting the Istio labels in the services and deployments")
+	}
+
 	// Generate base cluster topology
 	logrus.Info("Generate base cluster topology")
 	baseClusterTopology, err := topology.NewClusterTopologyFromResources(clusterResources)

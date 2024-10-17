@@ -50,15 +50,17 @@ jobs:
 
       - name: Validate that the boutique demo is up and running
         run: |
+          set -x
           # Check that the four baseline service pods are running and ready
           while [ $(kubectl get pods -n baseline --no-headers -o custom-columns=NAMESPACE:metadata.namespace,POD:metadata.name,PodIP:status.podIP,READY-true:status.containerStatuses[*].ready | grep "true" | wc -l) -ne 4 ]
           do
-              echo "Waiting for baseline pods to run..."
+              echo "Waiting for baseline pods to run, iteration number $c..."
               kubectl get pods -n baseline -o custom-columns=NAMESPACE:metadata.namespace,POD:metadata.name,PodIP:status.podIP,READY-true:status.containerStatuses[*].ready
               ((c++)) && ((c==12)) && exit 1
               sleep 10
           done
-          apps=$(kubectl get pods -n baseline -o custom-columns=:metadata.labels.app | tr " " "\n" | sort -g | tr "\n" " " | xargs)
+          echo "All baseline pods are running and ready."
+          apps=$(kubectl get pods -n baseline -o jsonpath='{.items[*].metadata.labels.app\.kubernetes\.io/name}')
           echo ${apps}
           if [ "${apps}" != "cartservice frontend postgres productcatalogservice" ]; then exit 1; fi
 

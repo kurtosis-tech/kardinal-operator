@@ -18,10 +18,22 @@ import (
 )
 
 const (
-	BaselineNamespace       = "baseline"
-	trueStr                 = "true"
-	kardinalManagedLabelKey = "kardinal.dev/managed"
+	BaselineNamespace        = "baseline"
+	defaultVersionLabelValue = "baseline"
+	trueStr                  = "true"
+	kardinalManagedLabelKey  = "kardinal.dev/managed"
+
+	// Thi is a common label used in several applications and recommended by Kubernetes: https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/
+	appNameKubernetesLabelKey = "app.kubernetes.io/name"
+	appLabelKey               = "app"
+	versionLabelKey           = "version"
 )
+
+type labeledResources interface {
+	GetLabels() map[string]string
+	SetLabels(labels map[string]string)
+	GetName() string
+}
 
 type Resources struct {
 	Namespaces []*Namespace
@@ -176,8 +188,6 @@ func ApplyServiceResources(ctx context.Context, clusterResources *Resources, clu
 							}
 						}
 					}
-					// OPERATOR-TODO: Set app and version labels on non-managed service if not already set.
-					// Those labels are required by Istio.
 				}
 			}
 		}
@@ -371,4 +381,68 @@ func ApplyIngressResources(ctx context.Context, clusterResources *Resources, clu
 	}
 
 	return nil
+}
+
+// OPERATOR-TODO make sure to execute this again once we connect the operator to listen to k8s Deployments and Services events
+// OPERATOR-TODO there is another approach we could take, if it doesn't works for all use cases, which is to use MutatingAdmissionWebHooks
+// related info for this here: https://book.kubebuilder.io/cronjob-tutorial/webhook-implementation and particularly this https://book.kubebuilder.io/reference/webhook-for-core-types
+// for creating and webhook for these core types.
+func InjectIstioLabelsInServicesAndDeployments(ctx context.Context, cl client.Client, clusterResources *Resources) error {
+	for _, namespace := range clusterResources.Namespaces {
+		for _, service := range namespace.Services {
+			shouldUpdateLabels := ensureIstioLabelsForResource(service)
+			if shouldUpdateLabels {
+				if err := cl.Update(ctx, service); err != nil {
+					return stacktrace.Propagate(err, "An error occurred adding Istio labels to service '%s'", service.GetName())
+				}
+			}
+
+		}
+
+		for _, deployment := range namespace.Deployments {
+			shouldUpdateLabels := ensureIstioLabelsForResource(deployment)
+			if shouldUpdateLabels {
+				if err := cl.Update(ctx, deployment); err != nil {
+					return stacktrace.Propagate(err, "An error occurred adding Istio labels to deployment '%s'", deployment.GetName())
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func ensureIstioLabelsForResource(resource labeledResources) bool {
+
+	var areLabelsUpdated bool
+
+	labels := resource.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+
+	// The 'app' label
+	_, ok := labels[appLabelKey]
+	if !ok {
+		areLabelsUpdated = true
+		appNameKubernetesLabelValue, ok := labels[appNameKubernetesLabelKey]
+		if ok {
+			labels[appLabelKey] = appNameKubernetesLabelValue
+		} else {
+			labels[appLabelKey] = resource.GetName()
+		}
+	}
+
+	// The 'version' label
+	// OPERATOR-TODO how are we going to handle when a non-managed resource already has the "version" label and
+	// this value is different from the value needed for managing the baseline traffic
+	_, ok = labels[versionLabelKey]
+	if !ok {
+		areLabelsUpdated = true
+		labels[versionLabelKey] = defaultVersionLabelValue
+	}
+	if areLabelsUpdated {
+		resource.SetLabels(labels)
+	}
+
+	return areLabelsUpdated
 }
