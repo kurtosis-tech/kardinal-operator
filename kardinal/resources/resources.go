@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"reflect"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 	"strings"
 
 	"github.com/kurtosis-tech/stacktrace"
@@ -103,6 +104,12 @@ func getNamespaceResources(ctx context.Context, namespace string, cl client.Clie
 
 	destinationRules := &istioclient.DestinationRuleList{}
 	err = cl.List(ctx, destinationRules, client.InNamespace(namespace))
+	if err != nil {
+		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of destination rules for namespace %s", namespace)
+	}
+
+	gateways := &gateway.GatewayList{}
+	err = cl.List(ctx, gateways, client.InNamespace(namespace))
 	if err != nil {
 		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of destination rules for namespace %s", namespace)
 	}

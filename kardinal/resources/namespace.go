@@ -6,6 +6,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	net "k8s.io/api/networking/v1"
 	kardinalcorev1 "kardinal.dev/kardinal-operator/api/core/v1"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 type Namespace struct {
@@ -13,6 +14,7 @@ type Namespace struct {
 	Services         []*corev1.Service    `json:"services"`
 	Deployments      []*appsv1.Deployment `json:"deployments"`
 	Ingresses        []*net.Ingress       `json:"ingresses"`
+	Gateways         []*gateway.Gateway   `json:"gateways"`
 	VirtualServices  []*istioclient.VirtualService
 	DestinationRules []*istioclient.DestinationRule
 	Flows            []*kardinalcorev1.Flow `json:"flows"`
@@ -62,6 +64,16 @@ func (namespace *Namespace) GetIngress(name string) *net.Ingress {
 	for _, ingress := range namespace.Ingresses {
 		if ingress.Name == name {
 			return ingress
+		}
+	}
+
+	return nil
+}
+
+func (namespace *Namespace) GetGateway(name string) *gateway.Gateway {
+	for _, gateway := range namespace.Gateways {
+		if gateway.Name == name {
+			return gateway
 		}
 	}
 
