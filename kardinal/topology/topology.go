@@ -223,8 +223,24 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the service resources")
 	}
+	err = resources.ApplyResources(
+		ctx,
+		clusterResources,
+		clusterTopologyResources,
+		cl,
+		func(namespace *resources.Namespace) []client.Object {
+			objects := make([]client.Object, len(namespace.Services))
+			for i := range namespace.Services {
+				objects[i] = namespace.Services[i]
+			}
+			return objects
+		},
+		func(namespace *resources.Namespace, name string) client.Object { return namespace.GetService(name) },
+		func(object1 client.Object, object2 client.Object) bool { return true },
+	)
 
 	err = resources.ApplyDeploymentResources(ctx, clusterResources, clusterTopologyResources, cl)
+
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the deployment resources")
 	}
