@@ -9,3 +9,5 @@ func IsManaged(objectMeta *metav1.ObjectMeta) bool {
 	}
 	return false
 }
+
+func int64Ptr(i int64) *int64 { return &i }

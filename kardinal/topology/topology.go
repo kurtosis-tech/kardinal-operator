@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/brunoga/deep"
@@ -10,6 +11,7 @@ import (
 	"github.com/kurtosis-tech/stacktrace"
 	"github.com/samber/lo"
 	"github.com/sirupsen/logrus"
+	istioclient "istio.io/client-go/pkg/apis/networking/v1alpha3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	net "k8s.io/api/networking/v1"
@@ -229,38 +231,87 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 		return stacktrace.Propagate(err, "An error occurred retrieving the list of resources")
 	}
 
-	err = resources.ApplyServiceResources(ctx, clusterResources, clusterTopologyResources, cl)
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.Services, func(service *corev1.Service, _ int) client.Object { return service })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			service := namespace.GetService(name)
+			if service == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			} else {
+				return service
+			}
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(object1.(*corev1.Service).Spec, object2.(*corev1.Service).Spec)
+		},
+	)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the service resources")
 	}
+
 	err = resources.ApplyResources(
-		ctx,
-		clusterResources,
-		clusterTopologyResources,
-		cl,
+		ctx, clusterResources, clusterTopologyResources, cl,
 		func(namespace *resources.Namespace) []client.Object {
-			objects := make([]client.Object, len(namespace.Services))
-			for i := range namespace.Services {
-				objects[i] = namespace.Services[i]
-			}
-			return objects
+			return lo.Map(namespace.Deployments, func(deployment *appsv1.Deployment, _ int) client.Object { return deployment })
 		},
-		func(namespace *resources.Namespace, name string) client.Object { return namespace.GetService(name) },
-		func(object1 client.Object, object2 client.Object) bool { return true },
+		func(namespace *resources.Namespace, name string) client.Object {
+			deployment := namespace.GetDeployment(name)
+			if deployment == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			}
+			return deployment
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(object1.(*appsv1.Deployment).Spec, object2.(*appsv1.Deployment).Spec)
+		},
 	)
-
-	err = resources.ApplyDeploymentResources(ctx, clusterResources, clusterTopologyResources, cl)
-
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the deployment resources")
 	}
 
-	err = resources.ApplyVirtualServiceResources(ctx, clusterResources, clusterTopologyResources, cl)
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.VirtualServices, func(virtualService *istioclient.VirtualService, _ int) client.Object { return virtualService })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			virtualService := namespace.GetVirtualService(name)
+			if virtualService == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			}
+			return virtualService
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(&object1.(*istioclient.VirtualService).Spec, &object2.(*istioclient.VirtualService).Spec)
+		},
+	)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the virtual service resources")
 	}
 
-	err = resources.ApplyDestinationRuleResources(ctx, clusterResources, clusterTopologyResources, cl)
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.DestinationRules, func(destinationRule *istioclient.DestinationRule, _ int) client.Object { return destinationRule })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			destinationRule := namespace.GetDestinationRule(name)
+			if destinationRule == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			}
+			return destinationRule
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(&object1.(*istioclient.DestinationRule).Spec, &object2.(*istioclient.DestinationRule).Spec)
+		},
+	)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the virtual service resources")
 	}
