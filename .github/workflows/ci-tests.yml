@@ -50,6 +50,7 @@ jobs:
 
       - name: Validate that the boutique demo is up and running
         run: |
+          set -x
           # Check that the four baseline service pods are running and ready
           while [ $(kubectl get pods -n baseline --no-headers -o custom-columns=NAMESPACE:metadata.namespace,POD:metadata.name,PodIP:status.podIP,READY-true:status.containerStatuses[*].ready | grep "true" | wc -l) -ne 4 ]
           do
