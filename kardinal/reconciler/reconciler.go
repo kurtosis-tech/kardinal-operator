@@ -10,20 +10,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const (
-	// Thi is a common label used in several applications and recommended by Kubernetes: https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/
-	appNameKubernetesLabelKey = "app.kubernetes.io/name"
-	appLabelKey               = "app"
-	versionLabelKey           = "version"
-	defaultVersionLabelValue  = "baseline"
-)
-
-type labeledResources interface {
-	GetLabels() map[string]string
-	SetLabels(labels map[string]string)
-	GetName() string
-}
-
 func Reconcile(ctx context.Context, cl client.Client) error {
 	logrus.Info("Reconciling")
 
@@ -34,8 +20,8 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 		return stacktrace.Propagate(err, "An error occurred retrieving the list of resources")
 	}
 
-	if err := reconcileIstioLabelsForBaselineServicesAndDeployments(ctx, cl, clusterResources); err != nil {
-		return stacktrace.Propagate(err, "An error occurred reconciling the Istio labels")
+	if err := resources.InjectIstioLabelsInServicesAndDeployments(ctx, cl, clusterResources); err != nil {
+		return stacktrace.Propagate(err, "An error occurred injecting the Istio labels in the services and deployments")
 	}
 
 	// Generate base cluster topology
@@ -110,59 +96,6 @@ func Reconcile(ctx context.Context, cl client.Client) error {
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the resources")
 	}
-
-	return nil
-}
-
-// OPERATOR-TODO make sure to execute this again once we connect the operator to listen to k8s Deployments and Services events
-// OPERATOR-TODO there is another approach we could take, if it doesn't works for all use cases, which is to use MutatingAdmissionWebHooks
-// related info for this here: https://book.kubebuilder.io/cronjob-tutorial/webhook-implementation and particularly this https://book.kubebuilder.io/reference/webhook-for-core-types
-// for creating and webhook for these core types.
-func reconcileIstioLabelsForBaselineServicesAndDeployments(ctx context.Context, cl client.Client, clusterResources *resources.Resources) error {
-	for _, namespace := range clusterResources.Namespaces {
-		for _, service := range namespace.Services {
-			ensureIstioLabelsForResource(service)
-			if err := cl.Update(ctx, service); err != nil {
-				return stacktrace.Propagate(err, "An error occurred adding Istio labels to service '%s'", service.GetName())
-			}
-		}
-
-		for _, deployment := range namespace.Deployments {
-			ensureIstioLabelsForResource(deployment)
-			if err := cl.Update(ctx, deployment); err != nil {
-				return stacktrace.Propagate(err, "An error occurred adding Istio labels to deployment '%s'", deployment.GetName())
-			}
-		}
-	}
-	return nil
-}
-
-func ensureIstioLabelsForResource(resource labeledResources) error {
-
-	labels := resource.GetLabels()
-	if labels == nil {
-		labels = map[string]string{}
-	}
-
-	// The 'app' label
-	_, ok := labels[appLabelKey]
-	if !ok {
-		appNameKubernetesLabelValue, ok := labels[appNameKubernetesLabelKey]
-		if ok {
-			labels[appLabelKey] = appNameKubernetesLabelValue
-		} else {
-			labels[appLabelKey] = resource.GetName()
-		}
-	}
-
-	// The 'version' label
-	// OPERATOR-TODO how are we going to handle when a non-managed resource already has the "version" label and
-	// this value is different from the value needed for managing the baseline traffic
-	_, ok = labels[versionLabelKey]
-	if !ok {
-		labels[versionLabelKey] = defaultVersionLabelValue
-	}
-	resource.SetLabels(labels)
 
 	return nil
 }
