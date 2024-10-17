@@ -3,18 +3,15 @@ kind: Deployment
 metadata:
   name: cartservice-v1
   labels:
-    app: cartservice
-    version: v1
+    app.kubernetes.io/name: cartservice
 spec:
   selector:
     matchLabels:
-      app: cartservice
-      version: v1
+      app.kubernetes.io/name: cartservice
   template:
     metadata:
       labels:
-        app: cartservice
-        version: v1
+        app.kubernetes.io/name: cartservice
     spec:
       terminationGracePeriodSeconds: 5
       containers:
@@ -66,14 +63,13 @@ kind: Service
 metadata:
   name: cartservice
   labels:
-    app: cartservice
-    version: v1
+    app.kubernetes.io/name: cartservice
   annotations:
     kardinal.dev.service/dependencies: "postgres:tcp"
 spec:
   type: ClusterIP
   selector:
-    app: cartservice
+    app.kubernetes.io/name: cartservice
   ports:
     - name: http
       port: 8090
@@ -86,18 +82,15 @@ kind: Deployment
 metadata:
   name: frontend-v1
   labels:
-    app: frontend
-    version: v1
+    app.kubernetes.io/name: frontend
 spec:
   selector:
     matchLabels:
-      app: frontend
-      version: v1
+      app.kubernetes.io/name: frontend
   template:
     metadata:
       labels:
-        app: frontend
-        version: v1
+        app.kubernetes.io/name: frontend
       annotations:
         sidecar.istio.io/rewriteAppHTTPProbers: "true"
     spec:
@@ -139,20 +132,14 @@ kind: Service
 metadata:
   name: frontend
   labels:
-    app: frontend
-    version: v1
+    app.kubernetes.io/name: frontend
   annotations:
     kardinal.dev.service/dependencies: "productcatalogservice:http,cartservice:http"
-    kardinal.dev.service/plugins: |
-      - name: https://github.com/kurtosis-tech/free-currency-api-plugin.git
-        type: external
-        servicename: free-currency-api
-        args:
-          api_key: fca_live_VKZlykCWEiFcpBHnw74pzd4vLi04q1h9JySbVHDF
+    kardinal.dev.service/plugins: "jsdelivr-api"
 spec:
   type: ClusterIP
   selector:
-    app: frontend
+    app.kubernetes.io/name: frontend
   ports:
     - name: http
       port: 80
@@ -166,19 +153,16 @@ kind: Deployment
 metadata:
   name: postgres-v1
   labels:
-    app: postgres
-    version: v1
+    app.kubernetes.io/name: postgres
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: postgres
-      version: v1
+      app.kubernetes.io/name: postgres
   template:
     metadata:
       labels:
-        app: postgres
-        version: v1
+        app.kubernetes.io/name: postgres
     spec:
       containers:
         - name: postgres
@@ -206,36 +190,10 @@ kind: Service
 metadata:
   name: postgres
   labels:
-    app: postgres
-    version: v1
+    app.kubernetes.io/name: postgres
   annotations:
     kardinal.dev.service/stateful: "true"
-    kardinal.dev.service/plugins: |
-      - name: github.com/kurtosis-tech/postgres-seed-plugin
-        args:
-          seed_script: |
-            --  create the table
-            CREATE TABLE IF NOT EXISTS public.items(
-                id bigserial PRIMARY KEY,
-                created_at TIMESTAMP WITH TIME ZONE,
-                updated_at TIMESTAMP WITH TIME ZONE,
-                deleted_at TIMESTAMP WITH TIME ZONE,
-                user_id TEXT,
-                product_id TEXT,
-                quantity INTEGER
-            );
-
-            INSERT INTO public.items (id, created_at, updated_at, deleted_at, user_id, product_id, quantity) 
-            VALUES (1, '2024-08-02 13:02:07.656104 +00:00', '2024-08-02 13:02:07.656104 +00:00', null, '0494c5e0-dde0-48fa-a6d8-f7962f5476bf', '66VCHSJNUP', 1);
-
-            INSERT INTO public.items (id, created_at, updated_at, deleted_at, user_id, product_id, quantity) 
-            VALUES (2, '2024-08-02 13:02:10.891407 +00:00', '2024-08-02 13:02:10.891407 +00:00', null, '0494c5e0-dde0-48fa-a6d8-f7962f5476bf', '2ZYFJ3GM2N', 1);
-
-            -- Set the sequence to the correct value after inserting records
-            SELECT setval('public.items_id_seq', (SELECT MAX(id) FROM public.items));
-          db_name: "cart"
-          db_user: "postgresuser"
-          db_password: "postgrespass"
+    kardinal.dev.service/plugins: "postgres-seed-plugin"
 
 spec:
   type: ClusterIP
@@ -245,7 +203,7 @@ spec:
       targetPort: 5432
       protocol: TCP
   selector:
-    app: postgres
+    app.kubernetes.io/name: postgres
 
 ---
 apiVersion: apps/v1
@@ -253,18 +211,15 @@ kind: Deployment
 metadata:
   name: productcatalogservice-v1
   labels:
-    app: productcatalogservice
-    version: v1
+    app.kubernetes.io/name: productcatalogservice
 spec:
   selector:
     matchLabels:
-      app: productcatalogservice
-      version: v1
+      app.kubernetes.io/name: productcatalogservice
   template:
     metadata:
       labels:
-        app: productcatalogservice
-        version: v1
+        app.kubernetes.io/name: productcatalogservice
     spec:
       terminationGracePeriodSeconds: 5
       containers:
@@ -299,12 +254,11 @@ kind: Service
 metadata:
   name: productcatalogservice
   labels:
-    app: productcatalogservice
-    version: v1
+    app.kubernetes.io/name: productcatalogservice
 spec:
   type: ClusterIP
   selector:
-    app: productcatalogservice
+    app.kubernetes.io/name: productcatalogservice
   ports:
     - name: http
       port: 8070
@@ -317,10 +271,10 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
-    kubernetes.io/ingress.class: nginx
     kardinal.dev.service/ingress: "true"
   name: ingress
 spec:
+  ingressClassName: nginx
   rules:
     - host: prod.app.localhost
       http:

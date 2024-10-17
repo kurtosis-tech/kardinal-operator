@@ -63,6 +63,16 @@ func (clusterTopology *ClusterTopology) GetServiceByVersion(namespace string, na
 	return nil
 }
 
+func (clusterTopology *ClusterTopology) GetBaselineFlowService(namespace string, name string) *Service {
+	for _, service := range clusterTopology.Services {
+		if service.Namespace == namespace && service.ServiceID == name && !service.IsManaged {
+			return service
+		}
+	}
+
+	return nil
+}
+
 func (clusterTopology *ClusterTopology) UpdateWithFlow(
 	clusterGraph graph.Graph[ServiceHash, *Service],
 	flowId string,
@@ -108,7 +118,7 @@ func (clusterTopology *ClusterTopology) UpdateWithFlow(
 			clusterTopology.UpdateDependencies(service, modifiedService)
 
 			// create versioned parents for non http stateful services
-			// TODO - this should be done for all non http services and not just the stateful ones
+			// KARDINAL-TODO - this should be done for all non http services and not just the stateful ones
 			// 	every child should be copied; immediate parent duplicated
 			// 	if children of non http services support http then our routing will have to be modified
 			//  we should treat those http services as non http; a hack could be to remove the appProtocol HTTP marking
@@ -178,7 +188,7 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 	})
 	for _, services := range groupedServices {
 		if len(services) > 0 {
-			// TODO: this assumes service specs didn't change. May we need a new version to ClusterTopology data structure
+			// KARDINAL-TODO: this assumes service specs didn't change. May we need a new version to ClusterTopology data structure
 
 			// ServiceSpec is nil for external services - don't process anything bc theres nothing to add to the cluster
 			if services[0].ServiceSpec == nil {
@@ -190,7 +200,7 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 			resourceNamespace.VirtualServices = append(resourceNamespace.VirtualServices, virtualService)
 			resourceNamespace.DestinationRules = append(resourceNamespace.DestinationRules, destinationRule)
 
-			// TODO: Add authz policies
+			// OPERATOR-TODO: Add authz policies
 		}
 	}
 
@@ -255,7 +265,7 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 		return stacktrace.Propagate(err, "An error occurred applying the virtual service resources")
 	}
 
-	// TODO: Apply ingress resources
+	// OPERATOR-TODO: Apply ingress resources
 	/* err = resources.ApplyIngressResources(ctx, clusterResources, clusterTopologyResources, cl)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the ingress resources")
@@ -335,9 +345,7 @@ func (clusterTopology *ClusterTopology) Merge(clusterTopologies []*ClusterTopolo
 	mergedClusterTopology.Ingress.ActiveFlowIDs = lo.Uniq(mergedClusterTopology.Ingress.ActiveFlowIDs)
 	logrus.Infof("Services length: %d", len(mergedClusterTopology.Services))
 
-	// TODO improve the filtering method, we could implement the `Service.Equal` method to compare and filter the services
-	// TODO and inside this method we could use the k8s service marshall method (https://pkg.go.dev/k8s.io/api/core/v1#Service.Marsha) and also the same for other k8s fields
-	// TODO it should be faster
+	// KARDINAL-TODO improve the filtering method, we could implement the `Service.Equal` method to compare and filter the services and inside this method we could use the k8s service marshall method (https://pkg.go.dev/k8s.io/api/core/v1#Service.Marsha) and also the same for other k8s fields it should be faster
 	mergedClusterTopology.Services = lo.UniqBy(mergedClusterTopology.Services, func(service *Service) ServiceVersion {
 		serviceVersion := ServiceVersion{
 			ServiceID: service.ServiceID,
@@ -383,10 +391,8 @@ func (clusterTopology *ClusterTopology) GetNetIngresses() ([]*net.Ingress, []*co
 				for _, pathOriginal := range ruleOriginal.HTTP.Paths {
 					target := clusterTopology.GetServiceByVersion(namespace, pathOriginal.Backend.Service.Name, activeFlowID)
 					// fallback to baseline if backend not found at the active flow
-					// the baseline topology (or prod topology) flow ID and flow version are equal to the namespace these three should use same value
-					baselineFlowVersion := namespace
 					if target == nil {
-						target = clusterTopology.GetServiceByVersion(namespace, pathOriginal.Backend.Service.Name, baselineFlowVersion)
+						target = clusterTopology.GetBaselineFlowService(namespace, pathOriginal.Backend.Service.Name)
 					}
 					if target != nil {
 						path := *pathOriginal.DeepCopy()
@@ -489,7 +495,7 @@ func processServices(services []*corev1.Service, deployments []*appsv1.Deploymen
 		clusterTopologyServices = append(clusterTopologyServices, clusterTopologyService)
 	}
 
-	// TODO: Use the dependency CRs instead
+	// OPERATOR-TODO: Use the dependency CRs instead
 	for _, svcWithDependenciesAnnotation := range serviceWithDependencies {
 
 		serviceAndPorts := strings.Split(svcWithDependenciesAnnotation.dependenciesAnnotation, ",")

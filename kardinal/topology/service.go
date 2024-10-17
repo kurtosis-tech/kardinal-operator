@@ -101,7 +101,7 @@ func (service *Service) GetAppsV1Deployment(namespace string) *appsv1.Deployment
 	deployment.Spec.Template.ObjectMeta = metav1.ObjectMeta{
 		Annotations: map[string]string{
 			"sidecar.istio.io/inject": trueStr,
-			// TODO: make this a flag to help debugging
+			// KARDINAL-TODO: make this a flag to help debugging
 			// One can view the logs with: kubeclt logs -f -l app=<serviceID> -n <namespace> -c istio-proxy
 			"sidecar.istio.io/componentLogLevel": "lua:info",
 		},
@@ -195,7 +195,7 @@ func (service *Service) GetVirtualService(services []*Service) (*istioclient.Vir
 	destinationRule := service.GetDestinationRule(services)
 
 	for _, svc := range services {
-		// TODO: Support for multiple ports
+		// KARDINAL-TODO: Support for multiple ports
 		servicePort := &svc.ServiceSpec.Ports[0]
 		var flowHost *string
 
@@ -227,7 +227,7 @@ func (service *Service) GetVirtualService(services []*Service) (*istioclient.Vir
 }
 
 func (service *Service) GetDestinationRule(services []*Service) *istioclient.DestinationRule {
-	// TODO(shared-annotation) - we could store "shared" versions somewhere so that the pointers are the same
+	// KARDINAL-TODO(shared-annotation) - we could store "shared" versions somewhere so that the pointers are the same
 	// if we do that then the render work around isn't necessary
 	subsets := lo.UniqBy(
 		lo.Map(services, func(svc *Service, _ int) *v1alpha3.Subset {
@@ -238,7 +238,7 @@ func (service *Service) GetDestinationRule(services []*Service) *istioclient.Des
 				},
 			}
 
-			// TODO Narrow down this configuration to only subsets created for telepresence intercepts or find a way to enable TLS for telepresence intercepts https://github.com/kurtosis-tech/kardinal-kontrol/issues/14
+			// KARDINAL-TODO Narrow down this configuration to only subsets created for telepresence intercepts or find a way to enable TLS for telepresence intercepts https://github.com/kurtosis-tech/kardinal-kontrol/issues/14
 			// This config is necessary for Kardinal/Telepresence (https://www.telepresence.io/) integration
 			if svc.IsManaged {
 				newTrafficPolicy := &v1alpha3.TrafficPolicy{
