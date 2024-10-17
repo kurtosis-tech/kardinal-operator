@@ -60,7 +60,7 @@ jobs:
               sleep 10
           done
           echo "All baseline pods are running and ready."
-          app=$(kubectl get pods -n baseline -o jsonpath='{.items[*].metadata.labels.app\.kubernetes\.io/name}')
+          apps=$(kubectl get pods -n baseline -o jsonpath='{.items[*].metadata.labels.app\.kubernetes\.io/name}')
           echo ${apps}
           if [ "${apps}" != "cartservice frontend postgres productcatalogservice" ]; then exit 1; fi
 
