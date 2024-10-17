@@ -1,8 +1,9 @@
 package resources
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 type labeledResourcesForTest struct {
