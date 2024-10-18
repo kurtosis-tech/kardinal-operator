@@ -162,18 +162,16 @@ func AddAnnotations(obj *metav1.ObjectMeta, annotations map[string]string) {
 	}
 }
 
+// ApplyResources compares the current cluster resources with the base + flows topology resources and applies the differences.
+// getObjectFunc and getObjectsFunc are used to retrieve the namespace resources.
+// compareObjectsFunc is used to compare two resources 
 func ApplyResources(
 	ctx context.Context,
-	// Current cluster resources
 	clusterResources *Resources,
-	// Base + flows resources to reconcile
 	clusterTopologyResources *Resources,
 	cl client.Client,
-	// Function to retrieve the namespace resources
 	getObjectsFunc func(namespace *Namespace) []client.Object,
-	// Function to retrieve a resource by namespace and name
 	getObjectFunc func(namespace *Namespace, name string) client.Object,
-	// Function to compare two resources
 	compareObjectsFunc func(object1 client.Object, object2 client.Object) bool) error {
 	for _, namespace := range clusterResources.Namespaces {
 		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
@@ -184,7 +182,7 @@ func ApplyResources(
 					logrus.Infof("Creating %s %s", clusterTopologyNamespaceObject.GetObjectKind().GroupVersionKind().String(), clusterTopologyNamespaceObject.GetName())
 					err := cl.Create(ctx, clusterTopologyNamespaceObject, client.FieldOwner(fieldOwner))
 					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred creating resource %s", clusterTopologyNamespaceObject.GetName())
+						return stacktrace.Propagate(err, "An error occurred creating %s %s", clusterTopologyNamespaceObject.GetObjectKind().GroupVersionKind().String(), clusterTopologyNamespaceObject.GetName())
 					}
 				} else {
 					namespaceObjectLabels := namespaceObject.GetLabels()
@@ -195,7 +193,7 @@ func ApplyResources(
 							clusterTopologyNamespaceObject.SetResourceVersion(namespaceObject.GetResourceVersion())
 							err := cl.Update(ctx, clusterTopologyNamespaceObject)
 							if err != nil {
-								return stacktrace.Propagate(err, "An error occurred updating resource %s", clusterTopologyNamespaceObject.GetName())
+								return stacktrace.Propagate(err, "An error occurred updating %s %s", clusterTopologyNamespaceObject.GetObjectKind().GroupVersionKind().String(), clusterTopologyNamespaceObject.GetName())
 							}
 						}
 					}
@@ -211,7 +209,7 @@ func ApplyResources(
 					logrus.Infof("Deleting %s %s", namespaceObject.GetObjectKind().GroupVersionKind().String(), namespaceObject.GetName())
 					err := cl.Delete(ctx, namespaceObject, client.PropagationPolicy(metav1.DeletePropagationForeground))
 					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred deleting resource %s", namespaceObject.GetName())
+							return stacktrace.Propagate(err, "An error occurred deleting %s %s", namespaceObject.GetObjectKind().GroupVersionKind().String(), namespaceObject.GetName())
 					}
 				}
 			}
