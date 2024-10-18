@@ -1,4 +1,4 @@
-name: Publish demo artifacts
+name: Publish artifacts
 
 on:
   push:
@@ -17,7 +17,7 @@ concurrency:
 jobs:
   build-publish-demo:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    # if: github.ref == 'refs/heads/main'
     steps:
       - name: git checkout
         uses: actions/checkout@v3
