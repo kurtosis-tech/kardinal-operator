@@ -21,6 +21,9 @@ CONTAINER_TOOL ?= docker
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
+# Kardinal Operator
+IMG ?= kurtosistech/kardinal-operator:latest
+
 .PHONY: all
 all: build
 

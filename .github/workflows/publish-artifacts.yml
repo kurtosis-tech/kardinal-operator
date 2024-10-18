@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-publish-demo:
+  build-publish-artifacts:
     runs-on: ubuntu-latest
     # if: github.ref == 'refs/heads/main'
     steps:
