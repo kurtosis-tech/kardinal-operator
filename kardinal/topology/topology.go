@@ -394,7 +394,6 @@ func (clusterTopology *ClusterTopology) Merge(clusterTopologies []*ClusterTopolo
 		mergedClusterTopology.Ingress.ActiveFlowIDs = append(mergedClusterTopology.Ingress.ActiveFlowIDs, topology.Ingress.ActiveFlowIDs...)
 	}
 	mergedClusterTopology.Ingress.ActiveFlowIDs = lo.Uniq(mergedClusterTopology.Ingress.ActiveFlowIDs)
-	logrus.Infof("Services length: %d", len(mergedClusterTopology.Services))
 
 	// KARDINAL-TODO improve the filtering method, we could implement the `Service.Equal` method to compare and filter the services and inside this method we could use the k8s service marshall method (https://pkg.go.dev/k8s.io/api/core/v1#Service.Marsha) and also the same for other k8s fields it should be faster
 	mergedClusterTopology.Services = lo.UniqBy(mergedClusterTopology.Services, func(service *Service) ServiceVersion {
@@ -405,7 +404,6 @@ func (clusterTopology *ClusterTopology) Merge(clusterTopologies []*ClusterTopolo
 		}
 		return serviceVersion
 	})
-	logrus.Infof("Services length: %d", len(mergedClusterTopology.Services))
 	mergedClusterTopology.ServiceDependencies = lo.UniqBy(mergedClusterTopology.ServiceDependencies, func(serviceDependency *ServiceDependency) ServiceDependencyVersion {
 		serviceDependencyVersion := ServiceDependencyVersion{
 			ServiceID:                 serviceDependency.Service.ServiceID,

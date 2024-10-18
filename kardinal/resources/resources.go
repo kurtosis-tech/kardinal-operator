@@ -164,11 +164,16 @@ func AddAnnotations(obj *metav1.ObjectMeta, annotations map[string]string) {
 
 func ApplyResources(
 	ctx context.Context,
+	// Current cluster resources
 	clusterResources *Resources,
+	// Base + flows resources to reconcile
 	clusterTopologyResources *Resources,
 	cl client.Client,
+	// Function to retrieve the namespace resources
 	getObjectsFunc func(namespace *Namespace) []client.Object,
+	// Function to retrieve a resource by namespace and name
 	getObjectFunc func(namespace *Namespace, name string) client.Object,
+	// Function to compare two resources
 	compareObjectsFunc func(object1 client.Object, object2 client.Object) bool) error {
 	for _, namespace := range clusterResources.Namespaces {
 		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
