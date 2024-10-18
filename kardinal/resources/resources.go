@@ -164,7 +164,7 @@ func AddAnnotations(obj *metav1.ObjectMeta, annotations map[string]string) {
 
 // ApplyResources compares the current cluster resources with the base + flows topology resources and applies the differences.
 // getObjectFunc and getObjectsFunc are used to retrieve the namespace resources.
-// compareObjectsFunc is used to compare two resources 
+// compareObjectsFunc is used to compare two resources
 func ApplyResources(
 	ctx context.Context,
 	clusterResources *Resources,
@@ -209,7 +209,7 @@ func ApplyResources(
 					logrus.Infof("Deleting %s %s", namespaceObject.GetObjectKind().GroupVersionKind().String(), namespaceObject.GetName())
 					err := cl.Delete(ctx, namespaceObject, client.PropagationPolicy(metav1.DeletePropagationForeground))
 					if err != nil {
-							return stacktrace.Propagate(err, "An error occurred deleting %s %s", namespaceObject.GetObjectKind().GroupVersionKind().String(), namespaceObject.GetName())
+						return stacktrace.Propagate(err, "An error occurred deleting %s %s", namespaceObject.GetObjectKind().GroupVersionKind().String(), namespaceObject.GetName())
 					}
 				}
 			}
