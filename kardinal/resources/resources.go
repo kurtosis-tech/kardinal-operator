@@ -2,7 +2,6 @@ package resources
 
 import (
 	"context"
-	"reflect"
 	gateway "sigs.k8s.io/gateway-api/apis/v1"
 	"strings"
 
@@ -28,6 +27,8 @@ const (
 	appNameKubernetesLabelKey = "app.kubernetes.io/name"
 	appLabelKey               = "app"
 	versionLabelKey           = "version"
+
+	fieldOwner = "kardinal-operator"
 )
 
 type labeledResources interface {
@@ -176,30 +177,38 @@ func AddAnnotations(obj *metav1.ObjectMeta, annotations map[string]string) {
 	}
 }
 
-// OPERATOR-TODO: Add create, update and delete global options
-// OPERATOR-TODO: Refactor the Apply... functions
-
-func ApplyServiceResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
+// ApplyResources compares the current cluster resources with the base + flows topology resources and applies the differences.
+// getObjectFunc and getObjectsFunc are used to retrieve the namespace resources.
+// compareObjectsFunc is used to compare two resources
+func ApplyResources(
+	ctx context.Context,
+	clusterResources *Resources,
+	clusterTopologyResources *Resources,
+	cl client.Client,
+	getObjectsFunc func(namespace *Namespace) []client.Object,
+	getObjectFunc func(namespace *Namespace, name string) client.Object,
+	compareObjectsFunc func(object1 client.Object, object2 client.Object) bool) error {
 	for _, namespace := range clusterResources.Namespaces {
 		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
 		if clusterTopologyNamespace != nil {
-			for _, service := range clusterTopologyNamespace.Services {
-				namespaceService := namespace.GetService(service.Name)
-				if namespaceService == nil {
-					logrus.Infof("Creating service %s", service.Name)
-					err := cl.Create(ctx, service)
+			for _, clusterTopologyNamespaceObject := range getObjectsFunc(clusterTopologyNamespace) {
+				namespaceObject := getObjectFunc(namespace, clusterTopologyNamespaceObject.GetName())
+				if namespaceObject == nil {
+					logrus.Infof("Creating %s %s", clusterTopologyNamespaceObject.GetObjectKind().GroupVersionKind().String(), clusterTopologyNamespaceObject.GetName())
+					err := cl.Create(ctx, clusterTopologyNamespaceObject, client.FieldOwner(fieldOwner))
 					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred creating service %s", service.Name)
+						return stacktrace.Propagate(err, "An error occurred creating %s %s", clusterTopologyNamespaceObject.GetObjectKind().GroupVersionKind().String(), clusterTopologyNamespaceObject.GetName())
 					}
 				} else {
-					serviceLabels := service.Labels
-					isManaged, found := serviceLabels[kardinalManagedLabelKey]
+					namespaceObjectLabels := namespaceObject.GetLabels()
+					isManaged, found := namespaceObjectLabels[kardinalManagedLabelKey]
 					if found && isManaged == trueStr {
-						if !reflect.DeepEqual(namespaceService.Spec, service.Spec) {
-							service.ResourceVersion = namespaceService.ResourceVersion
-							err := cl.Update(ctx, service)
+						if !compareObjectsFunc(clusterTopologyNamespaceObject, namespaceObject) {
+							logrus.Infof("Updating %s %s", clusterTopologyNamespaceObject.GetObjectKind().GroupVersionKind().String(), clusterTopologyNamespaceObject.GetName())
+							clusterTopologyNamespaceObject.SetResourceVersion(namespaceObject.GetResourceVersion())
+							err := cl.Update(ctx, clusterTopologyNamespaceObject)
 							if err != nil {
-								return stacktrace.Propagate(err, "An error occurred updating service %s", service.Name)
+								return stacktrace.Propagate(err, "An error occurred updating %s %s", clusterTopologyNamespaceObject.GetObjectKind().GroupVersionKind().String(), clusterTopologyNamespaceObject.GetName())
 							}
 						}
 					}
@@ -207,265 +216,16 @@ func ApplyServiceResources(ctx context.Context, clusterResources *Resources, clu
 			}
 		}
 
-		for _, service := range namespace.Services {
-			serviceLabels := service.Labels
-			isManaged, found := serviceLabels[kardinalManagedLabelKey]
+		for _, namespaceObject := range getObjectsFunc(namespace) {
+			namespaceObjectLabels := namespaceObject.GetLabels()
+			isManaged, found := namespaceObjectLabels[kardinalManagedLabelKey]
 			if found && isManaged == trueStr {
-				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetService(service.Name) == nil {
-					logrus.Infof("Deleting service %s", service.Name)
-					err := cl.Delete(ctx, service)
+				if clusterTopologyNamespace == nil || getObjectFunc(clusterTopologyNamespace, namespaceObject.GetName()) == nil {
+					logrus.Infof("Deleting %s %s", namespaceObject.GetObjectKind().GroupVersionKind().String(), namespaceObject.GetName())
+					err := cl.Delete(ctx, namespaceObject, client.PropagationPolicy(metav1.DeletePropagationForeground))
 					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred deleting service %s", service.Name)
+						return stacktrace.Propagate(err, "An error occurred deleting %s %s", namespaceObject.GetObjectKind().GroupVersionKind().String(), namespaceObject.GetName())
 					}
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func ApplyDeploymentResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
-	for _, namespace := range clusterResources.Namespaces {
-		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
-		if clusterTopologyNamespace != nil {
-			for _, deployment := range clusterTopologyNamespace.Deployments {
-				namespaceDeployment := namespace.GetDeployment(deployment.Name)
-				if namespaceDeployment == nil {
-					logrus.Infof("Creating deployment %s", deployment.Name)
-					err := cl.Create(ctx, deployment)
-					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred creating deployment %s", deployment.Name)
-					}
-				} else {
-					deploymentLabels := deployment.Labels
-					isManaged, found := deploymentLabels[kardinalManagedLabelKey]
-					if found && isManaged == trueStr {
-						if !reflect.DeepEqual(namespaceDeployment.Spec, deployment.Spec) {
-							deployment.ResourceVersion = namespaceDeployment.ResourceVersion
-							err := cl.Update(ctx, deployment)
-							if err != nil {
-								return stacktrace.Propagate(err, "An error occurred updating deployment %s", deployment.Name)
-							}
-						}
-					}
-				}
-			}
-		}
-
-		for _, deployment := range namespace.Deployments {
-			deploymentLabels := deployment.Labels
-			isManaged, found := deploymentLabels[kardinalManagedLabelKey]
-			if found && isManaged == trueStr {
-				if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetDeployment(deployment.Name) == nil {
-					logrus.Infof("Deleting deployment %s", deployment.Name)
-					err := cl.Delete(ctx, deployment)
-					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred deleting deployment %s", deployment.Name)
-					}
-				}
-			}
-			/* else {
-				annotationsToAdd := map[string]string{
-					"sidecar.istio.io/inject": "true",
-					// KARDINAL-TODO: make this a flag to help debugging
-					// One can view the logs with: kubeclt logs -f -l app=<serviceID> -n <namespace> -c istio-proxy
-					"sidecar.istio.io/componentLogLevel": "lua:info",
-				}
-				AddAnnotations(&deployment.ObjectMeta, annotationsToAdd)
-				err := cl.Update(ctx, deployment)
-				if err != nil {
-					return stacktrace.Propagate(err, "An error occurred updating deployment %s", deployment.Name)
-				}
-			} */
-		}
-	}
-
-	return nil
-}
-
-func ApplyVirtualServiceResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
-	for _, namespace := range clusterResources.Namespaces {
-		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
-		if clusterTopologyNamespace != nil {
-			for _, virtualService := range clusterTopologyNamespace.VirtualServices {
-				namespaceVirtualService := namespace.GetVirtualService(virtualService.Name)
-				if namespaceVirtualService == nil {
-					logrus.Infof("Creating virtual service %s", virtualService.Name)
-					err := cl.Create(ctx, virtualService)
-					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred creating virtual service %s", virtualService.Name)
-					}
-				} else {
-					if !reflect.DeepEqual(&namespaceVirtualService.Spec, &virtualService.Spec) {
-						virtualService.ResourceVersion = namespaceVirtualService.ResourceVersion
-						err := cl.Update(ctx, virtualService)
-						if err != nil {
-							return stacktrace.Propagate(err, "An error occurred updating virtual service %s", virtualService.Name)
-						}
-					}
-				}
-			}
-		}
-
-		for _, virtualService := range namespace.VirtualServices {
-			if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetVirtualService(virtualService.Name) == nil {
-				logrus.Infof("Deleting virtual service %s", virtualService.Name)
-				err := cl.Delete(ctx, virtualService)
-				if err != nil {
-					return stacktrace.Propagate(err, "An error occurred deleting virtual service %s", virtualService.Name)
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func ApplyDestinationRuleResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
-	for _, namespace := range clusterResources.Namespaces {
-		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
-		if clusterTopologyNamespace != nil {
-			for _, destinationRule := range clusterTopologyNamespace.DestinationRules {
-				namespaceDestinationRule := namespace.GetDestinationRule(destinationRule.Name)
-				if namespaceDestinationRule == nil {
-					logrus.Infof("Creating destination rule %s", destinationRule.Name)
-					err := cl.Create(ctx, destinationRule)
-					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred creating destination rule %s", destinationRule.Name)
-					}
-				} else {
-					if !reflect.DeepEqual(&namespaceDestinationRule.Spec, &destinationRule.Spec) {
-						destinationRule.ResourceVersion = namespaceDestinationRule.ResourceVersion
-						err := cl.Update(ctx, destinationRule)
-						if err != nil {
-							return stacktrace.Propagate(err, "An error occurred updating destination rule %s", destinationRule.Name)
-						}
-					}
-				}
-			}
-		}
-
-		for _, destinationRule := range namespace.DestinationRules {
-			if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetDestinationRule(destinationRule.Name) == nil {
-				logrus.Infof("Deleting destination rule %s", destinationRule.Name)
-				err := cl.Delete(ctx, destinationRule)
-				if err != nil {
-					return stacktrace.Propagate(err, "An error occurred deleting destination rule %s", destinationRule.Name)
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func ApplyIngressResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
-	for _, namespace := range clusterResources.Namespaces {
-		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
-		if clusterTopologyNamespace != nil {
-			for _, ingress := range clusterTopologyNamespace.Ingresses {
-				namespaceIngress := namespace.GetService(ingress.Name)
-				if namespaceIngress == nil {
-					logrus.Infof("Creating ingress %s", ingress.Name)
-					err := cl.Create(ctx, ingress)
-					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred creating ingress %s", ingress.Name)
-					}
-				} else {
-					if !reflect.DeepEqual(namespaceIngress.Spec, ingress.Spec) {
-						ingress.ResourceVersion = namespaceIngress.ResourceVersion
-						err := cl.Update(ctx, ingress)
-						if err != nil {
-							return stacktrace.Propagate(err, "An error occurred updating ingress %s", ingress.Name)
-						}
-					}
-				}
-			}
-		}
-
-		for _, ingress := range namespace.Ingresses {
-			if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetIngress(ingress.Name) == nil {
-				logrus.Infof("Deleting ingress %s", ingress.Name)
-				err := cl.Delete(ctx, ingress)
-				if err != nil {
-					return stacktrace.Propagate(err, "An error occurred deleting ingress %s", ingress.Name)
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func ApplyGatewayResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
-	for _, namespace := range clusterResources.Namespaces {
-		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
-		if clusterTopologyNamespace != nil {
-			for _, gateway := range clusterTopologyNamespace.Gateways {
-				namespaceGateway := namespace.GetGateway(gateway.Name)
-				if namespaceGateway == nil {
-					logrus.Infof("Creating gateway %s", gateway.Name)
-					err := cl.Create(ctx, gateway)
-					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred creating gateway %s", gateway.Name)
-					}
-				} else {
-					if !reflect.DeepEqual(namespaceGateway.Spec, gateway.Spec) {
-						gateway.ResourceVersion = namespaceGateway.ResourceVersion
-						err := cl.Update(ctx, gateway)
-						if err != nil {
-							return stacktrace.Propagate(err, "An error occurred updating gateway %s", gateway.Name)
-						}
-					}
-				}
-			}
-		}
-
-		for _, gateway := range namespace.Gateways {
-			if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetGateway(gateway.Name) == nil {
-				logrus.Infof("Deleting gateway %s", gateway.Name)
-				err := cl.Delete(ctx, gateway)
-				if err != nil {
-					return stacktrace.Propagate(err, "An error occurred deleting gateway %s", gateway.Name)
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-func ApplyHttpRouteResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
-	for _, namespace := range clusterResources.Namespaces {
-		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
-		if clusterTopologyNamespace != nil {
-			for _, route := range clusterTopologyNamespace.HTTPRoutes {
-				namespaceRoute := namespace.GetHTTPRoute(route.Name)
-				if namespaceRoute == nil {
-					logrus.Infof("Creating HTTP route %s", route.Name)
-					err := cl.Create(ctx, route)
-					if err != nil {
-						return stacktrace.Propagate(err, "An error occurred creating HTTP route %s", route.Name)
-					}
-				} else {
-					if !reflect.DeepEqual(namespaceRoute.Spec, route.Spec) {
-						route.ResourceVersion = namespaceRoute.ResourceVersion
-						err := cl.Update(ctx, route)
-						if err != nil {
-							return stacktrace.Propagate(err, "An error occurred updating HTTP route %s", route.Name)
-						}
-					}
-				}
-			}
-		}
-
-		for _, route := range namespace.HTTPRoutes {
-			if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetHTTPRoute(route.Name) == nil {
-				logrus.Infof("Deleting HTTP route %s", route.Name)
-				err := cl.Delete(ctx, route)
-				if err != nil {
-					return stacktrace.Propagate(err, "An error occurred deleting HTTP route %s", route.Name)
 				}
 			}
 		}
@@ -499,6 +259,7 @@ func InjectIstioLabelsInServicesAndDeployments(ctx context.Context, cl client.Cl
 			}
 		}
 	}
+
 	return nil
 }
 

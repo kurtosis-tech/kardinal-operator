@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"reflect"
 	gateway "sigs.k8s.io/gateway-api/apis/v1"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/kurtosis-tech/stacktrace"
 	"github.com/samber/lo"
 	"github.com/sirupsen/logrus"
+	istioclient "istio.io/client-go/pkg/apis/networking/v1alpha3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	net "k8s.io/api/networking/v1"
@@ -254,22 +256,87 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 		return stacktrace.Propagate(err, "An error occurred retrieving the list of resources")
 	}
 
-	err = resources.ApplyServiceResources(ctx, clusterResources, clusterTopologyResources, cl)
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.Services, func(service *corev1.Service, _ int) client.Object { return service })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			service := namespace.GetService(name)
+			if service == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			} else {
+				return service
+			}
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(object1.(*corev1.Service).Spec, object2.(*corev1.Service).Spec)
+		},
+	)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the service resources")
 	}
 
-	err = resources.ApplyDeploymentResources(ctx, clusterResources, clusterTopologyResources, cl)
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.Deployments, func(deployment *appsv1.Deployment, _ int) client.Object { return deployment })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			deployment := namespace.GetDeployment(name)
+			if deployment == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			}
+			return deployment
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(object1.(*appsv1.Deployment).Spec, object2.(*appsv1.Deployment).Spec)
+		},
+	)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the deployment resources")
 	}
 
-	err = resources.ApplyVirtualServiceResources(ctx, clusterResources, clusterTopologyResources, cl)
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.VirtualServices, func(virtualService *istioclient.VirtualService, _ int) client.Object { return virtualService })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			virtualService := namespace.GetVirtualService(name)
+			if virtualService == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			}
+			return virtualService
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(&object1.(*istioclient.VirtualService).Spec, &object2.(*istioclient.VirtualService).Spec)
+		},
+	)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the virtual service resources")
 	}
 
-	err = resources.ApplyDestinationRuleResources(ctx, clusterResources, clusterTopologyResources, cl)
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.DestinationRules, func(destinationRule *istioclient.DestinationRule, _ int) client.Object { return destinationRule })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			destinationRule := namespace.GetDestinationRule(name)
+			if destinationRule == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			}
+			return destinationRule
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(&object1.(*istioclient.DestinationRule).Spec, &object2.(*istioclient.DestinationRule).Spec)
+		},
+	)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the virtual service resources")
 	}
@@ -280,12 +347,44 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 		return stacktrace.Propagate(err, "An error occurred applying the ingress resources")
 	}*/
 
-	err = resources.ApplyGatewayResources(ctx, clusterResources, clusterTopologyResources, cl)
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.Gateways, func(gateway *gateway.Gateway, _ int) client.Object { return gateway })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			gateway := namespace.GetGateway(name)
+			if gateway == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			}
+			return gateway
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(&object1.(*gateway.Gateway).Spec, &object2.(*gateway.Gateway).Spec)
+		},
+	)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the gateway resources")
 	}
 
-	err = resources.ApplyHttpRouteResources(ctx, clusterResources, clusterTopologyResources, cl)
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.HTTPRoutes, func(route *gateway.HTTPRoute, _ int) client.Object { return route })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			route := namespace.GetHTTPRoute(name)
+			if route == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			}
+			return route
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(&object1.(*gateway.HTTPRoute).Spec, &object2.(*gateway.HTTPRoute).Spec)
+		},
+	)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the HTTP route resources")
 	}
@@ -378,7 +477,6 @@ func (clusterTopology *ClusterTopology) Merge(clusterTopologies []*ClusterTopolo
 		}
 		return serviceVersion
 	})
-	logrus.Infof("Services length: %d", len(mergedClusterTopology.Services))
 	mergedClusterTopology.ServiceDependencies = lo.UniqBy(mergedClusterTopology.ServiceDependencies, func(serviceDependency *ServiceDependency) ServiceDependencyVersion {
 		serviceDependencyVersion := ServiceDependencyVersion{
 			ServiceID:                 serviceDependency.Service.ServiceID,
