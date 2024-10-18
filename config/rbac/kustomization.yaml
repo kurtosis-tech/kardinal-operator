@@ -24,8 +24,6 @@ resources:
 # if you do not want those helpers be installed with your Project.
 - core_flow_editor_role.yaml
 - core_flow_viewer_role.yaml
-- kardinal_flow_editor_role.yaml
-- kardinal_flow_viewer_role.yaml
 - flow_editor_role.yaml
 - flow_viewer_role.yaml
 
