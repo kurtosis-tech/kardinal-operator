@@ -302,7 +302,7 @@ spec:
       protocol: HTTP
       allowedRoutes:
         namespaces:
-          from: All
+          from: All #OPERATOR-TODO review this value, it could also be 'Same' more info here: https://istio.io/latest/docs/tasks/traffic-management/ingress/ingress-control/
 
 ---
 apiVersion: gateway.networking.k8s.io/v1
