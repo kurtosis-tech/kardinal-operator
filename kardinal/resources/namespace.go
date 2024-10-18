@@ -82,9 +82,9 @@ func (namespace *Namespace) GetGateway(name string) *gateway.Gateway {
 }
 
 func (namespace *Namespace) GetHTTPRoute(name string) *gateway.HTTPRoute {
-	for _, httpRoutes := range namespace.HTTPRoutes {
-		if httpRoutes.Name == name {
-			return httpRoutes
+	for _, httpRoute := range namespace.HTTPRoutes {
+		if httpRoute.Name == name {
+			return httpRoute
 		}
 	}
 

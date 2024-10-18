@@ -357,13 +357,16 @@ func (clusterTopology *ClusterTopology) Merge(clusterTopologies []*ClusterTopolo
 		Services:            deep.MustCopy(clusterTopology.Services),
 		ServiceDependencies: deep.MustCopy(clusterTopology.ServiceDependencies),
 		Ingress:             deep.MustCopy(clusterTopology.Ingress),
+		GatewayAndRoutes:    deep.MustCopy(clusterTopology.GatewayAndRoutes),
 	}
 	for _, topology := range clusterTopologies {
 		mergedClusterTopology.Services = append(mergedClusterTopology.Services, topology.Services...)
 		mergedClusterTopology.ServiceDependencies = append(mergedClusterTopology.ServiceDependencies, topology.ServiceDependencies...)
 		mergedClusterTopology.Ingress.ActiveFlowIDs = append(mergedClusterTopology.Ingress.ActiveFlowIDs, topology.Ingress.ActiveFlowIDs...)
+		mergedClusterTopology.GatewayAndRoutes.ActiveFlowIDs = append(mergedClusterTopology.GatewayAndRoutes.ActiveFlowIDs, topology.GatewayAndRoutes.ActiveFlowIDs...)
 	}
 	mergedClusterTopology.Ingress.ActiveFlowIDs = lo.Uniq(mergedClusterTopology.Ingress.ActiveFlowIDs)
+	mergedClusterTopology.GatewayAndRoutes.ActiveFlowIDs = lo.Uniq(mergedClusterTopology.GatewayAndRoutes.ActiveFlowIDs)
 	logrus.Infof("Services length: %d", len(mergedClusterTopology.Services))
 
 	// KARDINAL-TODO improve the filtering method, we could implement the `Service.Equal` method to compare and filter the services and inside this method we could use the k8s service marshall method (https://pkg.go.dev/k8s.io/api/core/v1#Service.Marsha) and also the same for other k8s fields it should be faster

@@ -111,7 +111,13 @@ func getNamespaceResources(ctx context.Context, namespace string, cl client.Clie
 	gateways := &gateway.GatewayList{}
 	err = cl.List(ctx, gateways, client.InNamespace(namespace))
 	if err != nil {
-		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of destination rules for namespace %s", namespace)
+		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of gateways for namespace %s", namespace)
+	}
+
+	httpRoutes := &gateway.HTTPRouteList{}
+	err = cl.List(ctx, httpRoutes, client.InNamespace(namespace))
+	if err != nil {
+		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of HTTP routes for namespace %s", namespace)
 	}
 
 	flows := &kardinalcorev1.FlowList{}
@@ -128,6 +134,8 @@ func getNamespaceResources(ctx context.Context, namespace string, cl client.Clie
 		VirtualServices:  virtualServices.Items,
 		DestinationRules: destinationRules.Items,
 		Flows:            lo.Map(flows.Items, func(flow kardinalcorev1.Flow, _ int) *kardinalcorev1.Flow { return &flow }),
+		Gateways:         lo.Map(gateways.Items, func(gateway gateway.Gateway, _ int) *gateway.Gateway { return &gateway }),
+		HTTPRoutes:       lo.Map(httpRoutes.Items, func(route gateway.HTTPRoute, _ int) *gateway.HTTPRoute { return &route }),
 	}, nil
 }
 

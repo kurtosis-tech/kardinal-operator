@@ -314,7 +314,7 @@ metadata:
 spec:
   parentRefs:
     - name: gateway
-  hostnames: ["prod.app.localhost"]
+  hostnames: ["baseline.app.localhost"]
   rules:
     - matches:
         - path:
