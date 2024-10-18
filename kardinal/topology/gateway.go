@@ -9,7 +9,3 @@ type GatewayAndRoutes struct {
 	Gateways      []*gateway.Gateway       `json:"gateway"`
 	GatewayRoutes []*gateway.HTTPRouteSpec `json:"gatewayRoutes"`
 }
-
-type GatewayConfig struct {
-	Gateway gateway.Gateway `json:"gateway"`
-}

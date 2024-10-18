@@ -11,13 +11,14 @@ import (
 
 type Namespace struct {
 	Name             string
-	Services         []*corev1.Service    `json:"services"`
-	Deployments      []*appsv1.Deployment `json:"deployments"`
-	Ingresses        []*net.Ingress       `json:"ingresses"`
-	Gateways         []*gateway.Gateway   `json:"gateways"`
-	VirtualServices  []*istioclient.VirtualService
-	DestinationRules []*istioclient.DestinationRule
-	Flows            []*kardinalcorev1.Flow `json:"flows"`
+	Services         []*corev1.Service              `json:"services"`
+	Deployments      []*appsv1.Deployment           `json:"deployments"`
+	Ingresses        []*net.Ingress                 `json:"ingresses"`
+	Gateways         []*gateway.Gateway             `json:"gateways"`
+	HTTPRoutes       []*gateway.HTTPRoute           `json:"httpRoutes"`
+	VirtualServices  []*istioclient.VirtualService  `json:"virtualServices"`
+	DestinationRules []*istioclient.DestinationRule `json:"destinationRules"`
+	Flows            []*kardinalcorev1.Flow         `json:"flows"`
 }
 
 func (namespace *Namespace) GetService(name string) *corev1.Service {
@@ -74,6 +75,16 @@ func (namespace *Namespace) GetGateway(name string) *gateway.Gateway {
 	for _, gateway := range namespace.Gateways {
 		if gateway.Name == name {
 			return gateway
+		}
+	}
+
+	return nil
+}
+
+func (namespace *Namespace) GetHTTPRoute(name string) *gateway.HTTPRoute {
+	for _, httpRoutes := range namespace.HTTPRoutes {
+		if httpRoutes.Name == name {
+			return httpRoutes
 		}
 	}
 

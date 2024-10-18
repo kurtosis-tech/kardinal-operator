@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"fmt"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 	"strings"
 
 	"github.com/brunoga/deep"
@@ -218,6 +219,15 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 		resourceNamespace.Services = append(resourceNamespace.Services, frontService)
 	}
 
+	gateways := clusterTopology.getGateways()
+	groupedGateways := lo.GroupBy(gateways, func(gateway *gateway.Gateway) string {
+		return gateway.Namespace
+	})
+	for namespace, gatewayObj := range groupedGateways {
+		resourceNamespace := resourceNamespaces[namespace]
+		resourceNamespace.Gateways = append(resourceNamespace.Gateways, gatewayObj...)
+	}
+
 	clusterTopologyResources := &resources.Resources{
 		Namespaces: lo.Values(resourceNamespaces),
 	}
@@ -256,6 +266,11 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 		return stacktrace.Propagate(err, "An error occurred applying the ingress resources")
 	}*/
 
+	err = resources.ApplyGatewayResources(ctx, clusterResources, clusterTopologyResources, cl)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred applying the gateway resources")
+	}
+
 	return nil
 }
 
@@ -277,9 +292,11 @@ func (clusterTopology *ClusterTopology) GetGraph() graph.Graph[ServiceHash, *Ser
 }
 
 func (clusterTopology *ClusterTopology) Copy(flowId string) *ClusterTopology {
+	activeFlowIDs := []string{flowId}
 	clusterTopologyCopy := deep.MustCopy(clusterTopology)
 	clusterTopologyCopy.FlowID = flowId
-	clusterTopologyCopy.Ingress.ActiveFlowIDs = []string{flowId}
+	clusterTopologyCopy.Ingress.ActiveFlowIDs = activeFlowIDs
+	clusterTopologyCopy.GatewayAndRoutes.ActiveFlowIDs = activeFlowIDs
 	return clusterTopologyCopy
 }
 
@@ -409,11 +426,21 @@ func (clusterTopology *ClusterTopology) GetNetIngresses() ([]*net.Ingress, []*co
 	return ingressList, lo.Values(frontServices)
 }
 
+func (clusterTopology *ClusterTopology) getGateways() []*gateway.Gateway {
+	return lo.Map(clusterTopology.GatewayAndRoutes.Gateways, func(gateway *gateway.Gateway, gwId int) *gateway.Gateway {
+		if gateway.Namespace == "" {
+			gateway.Namespace = "default"
+		}
+		return gateway
+	})
+}
+
 func NewClusterTopologyFromResources(
 	clusterResources *resources.Resources,
 ) (*ClusterTopology, error) {
 	clusterTopologyServices := []*Service{}
 	clusterTopologyServiceDependencies := []*ServiceDependency{}
+	var clusterTopologyGatewayAndRoutes *GatewayAndRoutes
 	var clusterTopologyIngress *Ingress
 
 	for _, resourceNamespace := range clusterResources.Namespaces {
@@ -421,6 +448,7 @@ func NewClusterTopologyFromResources(
 		if err != nil {
 			return nil, stacktrace.NewError("an error occurred processing the resource services and deployments")
 		}
+		clusterTopologyGatewayAndRoutes = processGatewayAndRouteConfigs(resourceNamespace.Gateways, resourceNamespace.HTTPRoutes)
 		ingress := processIngresses(resourceNamespace.Ingresses)
 		clusterTopologyServices = append(clusterTopologyServices, services...)
 		clusterTopologyServiceDependencies = append(clusterTopologyServiceDependencies, serviceDependencies...)
@@ -433,8 +461,8 @@ func NewClusterTopologyFromResources(
 	}
 
 	// some validations
-	if len(clusterTopologyIngress.Ingresses) == 0 {
-		return nil, stacktrace.NewError("At least one ingress is required")
+	if len(clusterTopologyIngress.Ingresses) == 0 && len(clusterTopologyGatewayAndRoutes.Gateways) == 0 && len(clusterTopologyGatewayAndRoutes.GatewayRoutes) == 0 {
+		return nil, stacktrace.NewError("At least one ingress or gateway is required")
 	}
 	if len(clusterTopologyServices) == 0 {
 		return nil, stacktrace.NewError("At least one service is required in addition to the ingress service(s)")
@@ -444,6 +472,7 @@ func NewClusterTopologyFromResources(
 		Services:            clusterTopologyServices,
 		ServiceDependencies: clusterTopologyServiceDependencies,
 		Ingress:             clusterTopologyIngress,
+		GatewayAndRoutes:    clusterTopologyGatewayAndRoutes,
 	}
 
 	return &clusterTopology, nil
@@ -533,4 +562,39 @@ func processIngresses(ingresses []*net.Ingress) *Ingress {
 		}
 	}
 	return clusterTopologyIngress
+}
+
+func processGatewayAndRouteConfigs(gateways []*gateway.Gateway, routes []*gateway.HTTPRoute) *GatewayAndRoutes {
+	gatewayAndRoutes := &GatewayAndRoutes{
+		ActiveFlowIDs: []string{resources.BaselineNamespace},
+		Gateways:      []*gateway.Gateway{},
+		GatewayRoutes: []*gateway.HTTPRouteSpec{},
+	}
+	for _, gatewayObj := range gateways {
+		gatewayAnnotations := gatewayObj.GetObjectMeta().GetAnnotations()
+		isGateway, ok := gatewayAnnotations["kardinal.dev.service/gateway"]
+		if ok && isGateway == "true" {
+			if gatewayObj.Spec.Listeners == nil {
+				logrus.Warnf("Gateway %v is missing listeners", gatewayObj.Name)
+			} else {
+				for _, listener := range gatewayObj.Spec.Listeners {
+					if listener.Hostname != nil && !strings.HasPrefix(string(*listener.Hostname), "*.") {
+						logrus.Warnf("Gateway %v listener %v is missing a wildcard, creating flow entry points will not work properly.", gatewayObj.Name, listener.Hostname)
+					}
+				}
+			}
+			logrus.Infof("Managing gateway: %v", gatewayObj.Name)
+			gatewayAndRoutes.Gateways = append(gatewayAndRoutes.Gateways, gatewayObj)
+		} else {
+			logrus.Infof("Gateway %v is not a Kardinal gateway", gatewayObj.Name)
+		}
+	}
+	for _, route := range routes {
+		routeAnnotations := route.GetObjectMeta().GetAnnotations()
+		isRoute, ok := routeAnnotations["kardinal.dev.service/route"]
+		if ok && isRoute == "true" {
+			gatewayAndRoutes.GatewayRoutes = append(gatewayAndRoutes.GatewayRoutes, &route.Spec)
+		}
+	}
+	return gatewayAndRoutes
 }

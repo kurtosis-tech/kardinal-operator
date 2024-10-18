@@ -38,6 +38,7 @@ import (
 
 	corev1 "kardinal.dev/kardinal-operator/api/core/v1"
 	kardinalcore "kardinal.dev/kardinal-operator/internal/controller/core"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -50,6 +51,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(corev1.AddToScheme(scheme))
 	utilruntime.Must(istioclient.AddToScheme(scheme))
+	utilruntime.Must(gateway.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
