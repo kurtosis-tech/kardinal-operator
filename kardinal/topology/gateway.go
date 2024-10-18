@@ -5,7 +5,7 @@ import (
 )
 
 type GatewayAndRoutes struct {
-	ActiveFlowIDs []string                 `json:"activeFlowIDs"`
-	Gateways      []*gateway.Gateway       `json:"gateway"`
-	GatewayRoutes []*gateway.HTTPRouteSpec `json:"gatewayRoutes"`
+	ActiveFlowIDs []string             `json:"activeFlowIDs"`
+	Gateways      []*gateway.Gateway   `json:"gateway"`
+	GatewayRoutes []*gateway.HTTPRoute `json:"gatewayRoutes"`
 }

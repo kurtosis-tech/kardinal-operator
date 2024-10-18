@@ -428,6 +428,44 @@ func ApplyGatewayResources(ctx context.Context, clusterResources *Resources, clu
 	return nil
 }
 
+func ApplyHttpRouteResources(ctx context.Context, clusterResources *Resources, clusterTopologyResources *Resources, cl client.Client) error {
+	for _, namespace := range clusterResources.Namespaces {
+		clusterTopologyNamespace := clusterTopologyResources.GetNamespaceByName(namespace.Name)
+		if clusterTopologyNamespace != nil {
+			for _, route := range clusterTopologyNamespace.HTTPRoutes {
+				namespaceRoute := namespace.GetHTTPRoute(route.Name)
+				if namespaceRoute == nil {
+					logrus.Infof("Creating HTTP route %s", route.Name)
+					err := cl.Create(ctx, route)
+					if err != nil {
+						return stacktrace.Propagate(err, "An error occurred creating HTTP route %s", route.Name)
+					}
+				} else {
+					if !reflect.DeepEqual(namespaceRoute.Spec, route.Spec) {
+						route.ResourceVersion = namespaceRoute.ResourceVersion
+						err := cl.Update(ctx, route)
+						if err != nil {
+							return stacktrace.Propagate(err, "An error occurred updating HTTP route %s", route.Name)
+						}
+					}
+				}
+			}
+		}
+
+		for _, route := range namespace.HTTPRoutes {
+			if clusterTopologyNamespace == nil || clusterTopologyNamespace.GetHTTPRoute(route.Name) == nil {
+				logrus.Infof("Deleting HTTP route %s", route.Name)
+				err := cl.Delete(ctx, route)
+				if err != nil {
+					return stacktrace.Propagate(err, "An error occurred deleting HTTP route %s", route.Name)
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 // OPERATOR-TODO make sure to execute this again once we connect the operator to listen to k8s Deployments and Services events
 // OPERATOR-TODO there is another approach we could take, if it doesn't works for all use cases, which is to use MutatingAdmissionWebHooks
 // related info for this here: https://book.kubebuilder.io/cronjob-tutorial/webhook-implementation and particularly this https://book.kubebuilder.io/reference/webhook-for-core-types

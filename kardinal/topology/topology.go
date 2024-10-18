@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"fmt"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gateway "sigs.k8s.io/gateway-api/apis/v1"
 	"strings"
 
@@ -206,6 +207,19 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 		}
 	}
 
+	// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
+	//routes, frontServices, inboundFrontFilters := clusterTopology.getHttpRoutes()
+	routes, frontServices := clusterTopology.getHttpRoutes()
+	groupedRoutes := lo.GroupBy(routes, func(routes *gateway.HTTPRoute) string { return routes.Namespace })
+	for namespace, routes := range groupedRoutes {
+		resourceNamespace := resourceNamespaces[namespace]
+		resourceNamespace.HTTPRoutes = append(resourceNamespace.HTTPRoutes, routes...)
+	}
+	for _, frontService := range frontServices {
+		resourceNamespace := resourceNamespaces[frontService.Namespace]
+		resourceNamespace.Services = append(resourceNamespace.Services, frontService)
+	}
+
 	ingresses, frontServices := clusterTopology.GetNetIngresses()
 	groupedIngresses := lo.GroupBy(ingresses, func(ingress *net.Ingress) string {
 		return ingress.Namespace
@@ -269,6 +283,11 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 	err = resources.ApplyGatewayResources(ctx, clusterResources, clusterTopologyResources, cl)
 	if err != nil {
 		return stacktrace.Propagate(err, "An error occurred applying the gateway resources")
+	}
+
+	err = resources.ApplyHttpRouteResources(ctx, clusterResources, clusterTopologyResources, cl)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred applying the HTTP route resources")
 	}
 
 	return nil
@@ -435,6 +454,87 @@ func (clusterTopology *ClusterTopology) getGateways() []*gateway.Gateway {
 	})
 }
 
+// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
+func (clusterTopology *ClusterTopology) getHttpRoutes() ([]*gateway.HTTPRoute, []*corev1.Service) {
+	routes := []*gateway.HTTPRoute{}
+	frontServices := map[string]*corev1.Service{}
+
+	// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
+	//filters := []istioclient.EnvoyFilter{}
+
+	for _, activeFlowID := range clusterTopology.GatewayAndRoutes.ActiveFlowIDs {
+		logrus.Infof("Setting gateway route for active flow ID: %v", activeFlowID)
+		for routeId, routeOriginal := range clusterTopology.GatewayAndRoutes.GatewayRoutes {
+			namespace := routeOriginal.Namespace
+			routeSpecOriginal := routeOriginal.Spec
+			routeSpec := routeSpecOriginal.DeepCopy()
+
+			routeSpec.Hostnames = lo.Map(routeSpec.Hostnames, func(hostname gateway.Hostname, _ int) gateway.Hostname {
+				return gateway.Hostname(replaceOrAddSubdomain(string(hostname), activeFlowID))
+			})
+
+			for _, rule := range routeSpec.Rules {
+				for refIx, ref := range rule.BackendRefs {
+					originalServiceName := string(ref.Name)
+					target := clusterTopology.GetServiceByVersion(namespace, originalServiceName, activeFlowID)
+					// fallback to baseline if backend not found at the active flow
+					if target == nil {
+						target = clusterTopology.GetBaselineFlowService(namespace, originalServiceName)
+					}
+					if target != nil {
+						idVersion := fmt.Sprintf("%s-%s", target.ServiceID, activeFlowID)
+						_, serviceAlreadyAdded := frontServices[idVersion]
+						if !serviceAlreadyAdded {
+							frontServices[idVersion] = target.GetVersionedService(activeFlowID, namespace)
+							ref.Name = gateway.ObjectName(idVersion)
+							rule.BackendRefs[refIx] = ref
+
+							// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
+							//hostnames := lo.Map(routeSpec.Hostnames, func(item gateway.Hostname, _ int) string { return string(item) })
+
+							// Set Envoy FIlter for the service
+							//filter := &externalInboudFilter{
+							//	filter: generateDynamicLuaScript(allServices, activeFlowID, namespace, hostnames),
+							//	name:   strings.Join(hostnames, "-"),
+							//}
+							//inboundFilter := getInboundFilter(target.ServiceID, namespace, -1, &target.Version, filter)
+							//logrus.Debugf("Adding inbound filter to setup routing table for flow '%s' on service '%s', version '%s'", activeFlowID, target.ServiceID, target.Version)
+							//filters = append(filters, inboundFilter)
+						}
+					} else {
+						logrus.Errorf(">> service not found %v", ref.Name)
+					}
+				}
+			}
+
+			for parentRefIx, parentRef := range routeSpec.ParentRefs {
+				if parentRef.Namespace == nil || string(*parentRef.Namespace) == "" {
+					defaultNS := gateway.Namespace("default")
+					parentRef.Namespace = &defaultNS
+				}
+				routeSpec.ParentRefs[parentRefIx] = parentRef
+			}
+
+			route := &gateway.HTTPRoute{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "gateway.networking.k8s.io/v1",
+					Kind:       "HTTPRoute",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("http-route-%d-%s", routeId, activeFlowID),
+					Namespace: namespace,
+				},
+				Spec: *routeSpec,
+			}
+			routes = append(routes, route)
+		}
+	}
+
+	// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
+	//return routes, lo.Values(frontServices), filters
+	return routes, lo.Values(frontServices)
+}
+
 func NewClusterTopologyFromResources(
 	clusterResources *resources.Resources,
 ) (*ClusterTopology, error) {
@@ -568,7 +668,7 @@ func processGatewayAndRouteConfigs(gateways []*gateway.Gateway, routes []*gatewa
 	gatewayAndRoutes := &GatewayAndRoutes{
 		ActiveFlowIDs: []string{resources.BaselineNamespace},
 		Gateways:      []*gateway.Gateway{},
-		GatewayRoutes: []*gateway.HTTPRouteSpec{},
+		GatewayRoutes: []*gateway.HTTPRoute{},
 	}
 	for _, gatewayObj := range gateways {
 		gatewayAnnotations := gatewayObj.GetObjectMeta().GetAnnotations()
@@ -593,7 +693,7 @@ func processGatewayAndRouteConfigs(gateways []*gateway.Gateway, routes []*gatewa
 		routeAnnotations := route.GetObjectMeta().GetAnnotations()
 		isRoute, ok := routeAnnotations["kardinal.dev.service/route"]
 		if ok && isRoute == "true" {
-			gatewayAndRoutes.GatewayRoutes = append(gatewayAndRoutes.GatewayRoutes, &route.Spec)
+			gatewayAndRoutes.GatewayRoutes = append(gatewayAndRoutes.GatewayRoutes, route)
 		}
 	}
 	return gatewayAndRoutes
