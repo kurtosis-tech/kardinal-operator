@@ -4,7 +4,19 @@ Implementation of [Kardinal](https://github.com/kurtosis-tech/kardinal) as a K8S
 
 ## Install
 
-The Kardinal Operator is built using Kubebuilder.  Run the following commands to install the CRDs and the operator in the cluster pointed by your kubeconfig.
+### Requirements
+
+Istio is required and your namespaces should be labeled for injection. 
+
+```
+istioctl manifest install --set profile=default
+
+kubectl label namespace <namespace name> istio-injection=enabled
+```
+
+### Kardinal Operator
+
+The Kardinal Operator is built using Kubebuilder.  Run the following commands to install the CRDs and the operator in the cluster pointed by your kubeconfig.  The operator runs in a newly created namespace `kardinal-operator-system`.
 
 ```
 make deploy
