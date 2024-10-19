@@ -6,9 +6,6 @@ on:
       - main
     tags:
       - "v*.*.*"
-  pull_request:
-    branches:
-      - main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -17,7 +14,7 @@ concurrency:
 jobs:
   build-publish-artifacts:
     runs-on: ubuntu-latest
-    # if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: git checkout
         uses: actions/checkout@v3
