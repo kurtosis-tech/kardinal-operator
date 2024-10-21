@@ -18,6 +18,7 @@ package core
 
 import (
 	"context"
+	"github.com/sirupsen/logrus"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -54,7 +55,10 @@ type FlowReconciler struct {
 func (r *FlowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
 
-	_ = reconciler.Reconcile(ctx, r.Client)
+	err := reconciler.Reconcile(ctx, r.Client)
+	if err != nil {
+		logrus.Errorf("Error while reconciling: %s", err)
+	}
 
 	return ctrl.Result{}, nil
 }

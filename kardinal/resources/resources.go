@@ -201,6 +201,7 @@ func ApplyResources(
 					}
 				} else {
 					namespaceObjectLabels := namespaceObject.GetLabels()
+					//OPERATOR-TODO we have to check if it was marked for deletion by Kubernetes and handle it that situation
 					isManaged, found := namespaceObjectLabels[kardinalManagedLabelKey]
 					if found && isManaged == trueStr {
 						if !compareObjectsFunc(clusterTopologyNamespaceObject, namespaceObject) {

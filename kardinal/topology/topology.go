@@ -209,20 +209,18 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 		}
 	}
 
+	frontServices := []*corev1.Service{}
 	// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
 	//routes, frontServices, inboundFrontFilters := clusterTopology.getHttpRoutes()
-	routes, frontServices := clusterTopology.getHttpRoutes()
+	routes, frontServicesFromHttpRoutes := clusterTopology.getHttpRoutes()
 	groupedRoutes := lo.GroupBy(routes, func(routes *gateway.HTTPRoute) string { return routes.Namespace })
 	for namespace, routes := range groupedRoutes {
 		resourceNamespace := resourceNamespaces[namespace]
 		resourceNamespace.HTTPRoutes = append(resourceNamespace.HTTPRoutes, routes...)
 	}
-	for _, frontService := range frontServices {
-		resourceNamespace := resourceNamespaces[frontService.Namespace]
-		resourceNamespace.Services = append(resourceNamespace.Services, frontService)
-	}
+	frontServices = append(frontServices, frontServicesFromHttpRoutes...)
 
-	ingresses, frontServices := clusterTopology.GetNetIngresses()
+	ingresses, frontServicesFromIngresses := clusterTopology.GetNetIngresses()
 	groupedIngresses := lo.GroupBy(ingresses, func(ingress *net.Ingress) string {
 		return ingress.Namespace
 	})
@@ -230,7 +228,10 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 		resourceNamespace := resourceNamespaces[namespace]
 		resourceNamespace.Ingresses = append(resourceNamespace.Ingresses, ingresses...)
 	}
-	for _, frontService := range frontServices {
+	frontServices = append(frontServices, frontServicesFromIngresses...)
+
+	frontServicesToAdd := lo.UniqBy(frontServices, func(service *corev1.Service) string { return service.GetName() })
+	for _, frontService := range frontServicesToAdd {
 		resourceNamespace := resourceNamespaces[frontService.Namespace]
 		resourceNamespace.Services = append(resourceNamespace.Services, frontService)
 	}
@@ -588,6 +589,7 @@ func (clusterTopology *ClusterTopology) getHttpRoutes() ([]*gateway.HTTPRoute, [
 						if !serviceAlreadyAdded {
 							frontServices[idVersion] = target.GetVersionedService(activeFlowID, namespace)
 							ref.Name = gateway.ObjectName(idVersion)
+							//OPERATOR-TODO creo que tambien el problema es que hay 2 http route para el baseline flow
 							rule.BackendRefs[refIx] = ref
 
 							// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
@@ -610,7 +612,7 @@ func (clusterTopology *ClusterTopology) getHttpRoutes() ([]*gateway.HTTPRoute, [
 
 			for parentRefIx, parentRef := range routeSpec.ParentRefs {
 				if parentRef.Namespace == nil || string(*parentRef.Namespace) == "" {
-					defaultNS := gateway.Namespace("default")
+					defaultNS := gateway.Namespace(namespace)
 					parentRef.Namespace = &defaultNS
 				}
 				routeSpec.ParentRefs[parentRefIx] = parentRef
@@ -624,6 +626,9 @@ func (clusterTopology *ClusterTopology) getHttpRoutes() ([]*gateway.HTTPRoute, [
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      fmt.Sprintf("http-route-%d-%s", routeId, activeFlowID),
 					Namespace: namespace,
+					Labels: map[string]string{
+						kardinalManagedLabelKey: trueStr,
+					},
 				},
 				Spec: *routeSpec,
 			}
