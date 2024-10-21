@@ -51,7 +51,7 @@ func NewResourcesFromClient(ctx context.Context, cl client.Client) (*Resources, 
 	}
 
 	namespacePrefixesToIgnore := []string{
-		"default",
+		metav1.NamespaceDefault,
 		"ingress-nginx",
 		"istio",
 		"kube",

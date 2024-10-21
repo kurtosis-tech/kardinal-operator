@@ -550,7 +550,7 @@ func (clusterTopology *ClusterTopology) GetNetIngresses() ([]*net.Ingress, []*co
 func (clusterTopology *ClusterTopology) getGateways() []*gateway.Gateway {
 	return lo.Map(clusterTopology.GatewayAndRoutes.Gateways, func(gateway *gateway.Gateway, gwId int) *gateway.Gateway {
 		if gateway.Namespace == "" {
-			gateway.Namespace = "default"
+			gateway.Namespace = metav1.NamespaceDefault
 		}
 		return gateway
 	})
