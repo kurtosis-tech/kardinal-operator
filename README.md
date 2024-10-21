@@ -2,6 +2,52 @@
 
 Implementation of [Kardinal](https://github.com/kurtosis-tech/kardinal) as a K8S Operator.
 
+## Install
+
+### Requirements
+
+Istio is required and your namespaces should be labeled for injection. 
+
+```
+istioctl manifest install --set profile=default
+
+kubectl label namespace <namespace name> istio-injection=enabled
+```
+
+### Kardinal Operator
+
+The Kardinal Operator is built using Kubebuilder.  Run the following commands to install the CRDs and the operator in the cluster pointed by your kubeconfig.  The operator runs in a newly created namespace `kardinal-operator-system`.
+
+```
+make deploy
+```
+
+## CRDs
+
+### Flows
+
+```yaml
+apiVersion: core.kardinal.dev/v1
+kind: Flow
+metadata:
+  labels:
+    app.kubernetes.io/name: kardinal
+    app.kubernetes.io/managed-by: kardinal-operator
+  name: flow-test
+  namespace: baseline
+spec:
+  service: frontend
+  image: kurtosistech/frontend:demo-frontend
+```
+
+## Uninstall
+
+Run the following commands to uninstall the CRDs and the operator in the cluster pointed by your kubeconfig.
+
+```
+make undeploy
+```
+
 ## Development
 
 Minikube + K8S manifest deployed. K8S context set to your local cluster.
@@ -19,20 +65,6 @@ make run (Run operator against your local cluster)
 
 Manage custom resources with kubectl:
 
-```yaml
-apiVersion: core.kardinal.dev/v1
-kind: Flow
-metadata:
-  labels:
-    app.kubernetes.io/name: kardinal
-    app.kubernetes.io/managed-by: kustomize
-  name: flow-test
-  namespace: baseline
-spec:
-  service: frontend
-  image: kurtosistech/frontend:demo-frontend
-```
-
 ```
 # Create a flow 
 kubectl create -f ./ci/flow-test.yaml
@@ -45,11 +77,6 @@ kubectl get flows -n baseline
 
 # Describe a flow by its name 
 kubectl describe flows flow-test -n baseline
-```
-
-Deploy the operator inside the cluster
-```
-make deploy (when you want to test it inside the cluster)
 ```
 
 ## Update the CRDs API
