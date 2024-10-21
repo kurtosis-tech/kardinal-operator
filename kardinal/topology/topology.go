@@ -3,9 +3,7 @@ package topology
 import (
 	"context"
 	"fmt"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"reflect"
-	gateway "sigs.k8s.io/gateway-api/apis/v1"
 	"strings"
 
 	"github.com/brunoga/deep"
@@ -17,8 +15,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	net "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"kardinal.dev/kardinal-operator/kardinal/resources"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 const (
@@ -211,7 +211,7 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 
 	frontServices := []*corev1.Service{}
 	// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
-	//routes, frontServices, inboundFrontFilters := clusterTopology.getHttpRoutes()
+	// routes, frontServices, inboundFrontFilters := clusterTopology.getHttpRoutes()
 	routes, frontServicesFromHttpRoutes := clusterTopology.getHttpRoutes()
 	groupedRoutes := lo.GroupBy(routes, func(routes *gateway.HTTPRoute) string { return routes.Namespace })
 	for namespace, routes := range groupedRoutes {
@@ -562,7 +562,7 @@ func (clusterTopology *ClusterTopology) getHttpRoutes() ([]*gateway.HTTPRoute, [
 	frontServices := map[string]*corev1.Service{}
 
 	// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
-	//filters := []istioclient.EnvoyFilter{}
+	// filters := []istioclient.EnvoyFilter{}
 
 	for _, activeFlowID := range clusterTopology.GatewayAndRoutes.ActiveFlowIDs {
 		logrus.Infof("Setting gateway route for active flow ID: %v", activeFlowID)
@@ -589,20 +589,20 @@ func (clusterTopology *ClusterTopology) getHttpRoutes() ([]*gateway.HTTPRoute, [
 						if !serviceAlreadyAdded {
 							frontServices[idVersion] = target.GetVersionedService(activeFlowID, namespace)
 							ref.Name = gateway.ObjectName(idVersion)
-							//OPERATOR-TODO creo que tambien el problema es que hay 2 http route para el baseline flow
+							// OPERATOR-TODO creo que tambien el problema es que hay 2 http route para el baseline flow
 							rule.BackendRefs[refIx] = ref
 
 							// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
-							//hostnames := lo.Map(routeSpec.Hostnames, func(item gateway.Hostname, _ int) string { return string(item) })
+							// hostnames := lo.Map(routeSpec.Hostnames, func(item gateway.Hostname, _ int) string { return string(item) })
 
 							// Set Envoy FIlter for the service
-							//filter := &externalInboudFilter{
+							// filter := &externalInboudFilter{
 							//	filter: generateDynamicLuaScript(allServices, activeFlowID, namespace, hostnames),
 							//	name:   strings.Join(hostnames, "-"),
-							//}
-							//inboundFilter := getInboundFilter(target.ServiceID, namespace, -1, &target.Version, filter)
-							//logrus.Debugf("Adding inbound filter to setup routing table for flow '%s' on service '%s', version '%s'", activeFlowID, target.ServiceID, target.Version)
-							//filters = append(filters, inboundFilter)
+							// }
+							// inboundFilter := getInboundFilter(target.ServiceID, namespace, -1, &target.Version, filter)
+							// logrus.Debugf("Adding inbound filter to setup routing table for flow '%s' on service '%s', version '%s'", activeFlowID, target.ServiceID, target.Version)
+							// filters = append(filters, inboundFilter)
 						}
 					} else {
 						logrus.Errorf(">> service not found %v", ref.Name)
@@ -637,7 +637,7 @@ func (clusterTopology *ClusterTopology) getHttpRoutes() ([]*gateway.HTTPRoute, [
 	}
 
 	// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
-	//return routes, lo.Values(frontServices), filters
+	// return routes, lo.Values(frontServices), filters
 	return routes, lo.Values(frontServices)
 }
 

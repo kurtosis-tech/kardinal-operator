@@ -18,15 +18,14 @@ package core
 
 import (
 	"context"
-	"github.com/sirupsen/logrus"
 
+	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/runtime"
+	corev1 "kardinal.dev/kardinal-operator/api/core/v1"
+	"kardinal.dev/kardinal-operator/kardinal/reconciler"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	corev1 "kardinal.dev/kardinal-operator/api/core/v1"
-	"kardinal.dev/kardinal-operator/kardinal/reconciler"
 )
 
 // FlowReconciler reconciles a Flow object

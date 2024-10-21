@@ -2,7 +2,6 @@ package resources
 
 import (
 	"context"
-	gateway "sigs.k8s.io/gateway-api/apis/v1"
 	"strings"
 
 	"github.com/kurtosis-tech/stacktrace"
@@ -15,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kardinalcorev1 "kardinal.dev/kardinal-operator/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 const (
@@ -201,7 +201,7 @@ func ApplyResources(
 					}
 				} else {
 					namespaceObjectLabels := namespaceObject.GetLabels()
-					//OPERATOR-TODO we have to check if it was marked for deletion by Kubernetes and handle it that situation
+					// OPERATOR-TODO we have to check if it was marked for deletion by Kubernetes and handle it that situation
 					isManaged, found := namespaceObjectLabels[kardinalManagedLabelKey]
 					if found && isManaged == trueStr {
 						if !compareObjectsFunc(clusterTopologyNamespaceObject, namespaceObject) {
