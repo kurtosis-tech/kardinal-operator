@@ -1,5 +1,7 @@
 # Kardinal Operator
 
+## Disclaimer: This project is no longer maintained.
+
 Implementation of [Kardinal](https://github.com/kurtosis-tech/kardinal) as a K8S Operator.
 
 ## Install
