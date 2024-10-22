@@ -1,0 +1,3 @@
+Deployments need the following annotation "sidecar.istio.io/componentLogLevel": "lua:info" to be able to see the logs with: kubeclt logs -f -l app=<serviceID> -n <namespace> -c istio-proxy
+
+

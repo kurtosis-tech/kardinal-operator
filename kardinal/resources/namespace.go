@@ -6,6 +6,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	net "k8s.io/api/networking/v1"
 	kardinalcorev1 "kardinal.dev/kardinal-operator/api/core/v1"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 type Namespace struct {
@@ -13,9 +14,11 @@ type Namespace struct {
 	Services         []*corev1.Service              `json:"services"`
 	Deployments      []*appsv1.Deployment           `json:"deployments"`
 	Ingresses        []*net.Ingress                 `json:"ingresses"`
+	Gateways         []*gateway.Gateway             `json:"gateways"`
+	HTTPRoutes       []*gateway.HTTPRoute           `json:"httpRoutes"`
 	VirtualServices  []*istioclient.VirtualService  `json:"virtualServices"`
 	DestinationRules []*istioclient.DestinationRule `json:"destinationRules"`
-	EnvoyFilters     []*istioclient.EnvoyFilter     `json:"envoy_filters"`
+	EnvoyFilters     []*istioclient.EnvoyFilter     `json:"envoyFilters"`
 	Flows            []*kardinalcorev1.Flow         `json:"flows"`
 }
 
@@ -59,20 +62,40 @@ func (namespace *Namespace) GetDestinationRule(name string) *istioclient.Destina
 	return nil
 }
 
-func (namespace *Namespace) GetEnvoyFilter(name string) *istioclient.EnvoyFilter {
-	for _, filter := range namespace.EnvoyFilters {
-		if filter.Name == name {
-			return filter
+func (namespace *Namespace) GetIngress(name string) *net.Ingress {
+	for _, ingress := range namespace.Ingresses {
+		if ingress.Name == name {
+			return ingress
 		}
 	}
 
 	return nil
 }
 
-func (namespace *Namespace) GetIngress(name string) *net.Ingress {
-	for _, ingress := range namespace.Ingresses {
-		if ingress.Name == name {
-			return ingress
+func (namespace *Namespace) GetGateway(name string) *gateway.Gateway {
+	for _, gateway := range namespace.Gateways {
+		if gateway.Name == name {
+			return gateway
+		}
+	}
+
+	return nil
+}
+
+func (namespace *Namespace) GetHTTPRoute(name string) *gateway.HTTPRoute {
+	for _, httpRoute := range namespace.HTTPRoutes {
+		if httpRoute.Name == name {
+			return httpRoute
+		}
+	}
+
+	return nil
+}
+
+func (namespace *Namespace) GetEnvoyFilter(name string) *istioclient.EnvoyFilter {
+	for _, filter := range namespace.EnvoyFilters {
+		if filter.Name == name {
+			return filter
 		}
 	}
 

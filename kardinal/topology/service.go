@@ -304,8 +304,8 @@ func (service *Service) GetVirtualService(services []*Service) (*istioclient.Vir
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      service.ServiceID,
 			Namespace: service.Namespace,
-			Annotations: map[string]string{
-				"kardinal.dev/managed": trueStr,
+			Labels: map[string]string{
+				kardinalManagedLabelKey: trueStr,
 			},
 		},
 		Spec: v1alpha3.VirtualService{
@@ -354,6 +354,9 @@ func (service *Service) GetDestinationRule(services []*Service) *istioclient.Des
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      service.ServiceID,
 			Namespace: service.Namespace,
+			Labels: map[string]string{
+				kardinalManagedLabelKey: trueStr,
+			},
 		},
 		Spec: v1alpha3.DestinationRule{
 			Host:    service.ServiceID,

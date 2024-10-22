@@ -19,14 +19,13 @@ package core
 import (
 	"context"
 
+	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/runtime"
+	corev1 "kardinal.dev/kardinal-operator/api/core/v1"
+	"kardinal.dev/kardinal-operator/kardinal/reconciler"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	corev1 "kardinal.dev/kardinal-operator/api/core/v1"
-	"kardinal.dev/kardinal-operator/kardinal/reconciler"
 )
 
 // FlowReconciler reconciles a Flow object
@@ -57,7 +56,7 @@ func (r *FlowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	err := reconciler.Reconcile(ctx, r.Client)
 	if err != nil {
-		return reconcile.Result{}, err
+		logrus.Errorf("Error while reconciling: %s", err)
 	}
 
 	return ctrl.Result{}, nil

@@ -52,7 +52,7 @@ Deploy the operator inside the cluster
 make deploy (when you want to test it inside the cluster)
 ```
 
-## Update the CRDs API
+### Update the CRDs API
 
 1. Read [this document][api-design-doc] to follow the design rules.
 2. The CRDs API files are inside the `./api/core/v1` folder.
@@ -63,7 +63,7 @@ make deploy (when you want to test it inside the cluster)
 4. If you are adding a new CRD make sure its schema has been added in the `init` function in the `./cmd/main.go` file
 
 
-## Update the RBAC permissions
+### Update the RBAC permissions
 
 1. Read [this document][rbac-markers-doc] to understand what are the RBAC markers and how to compose them.
 2. Add, update or remove the RBAC markers, for instance the `flow` controller:
@@ -71,6 +71,15 @@ make deploy (when you want to test it inside the cluster)
    2. Edit the markers inside of it.
    3. Run `make manifests` to include your changes in the auto generated `./config/rbac/role.yaml` manifest file.
    4. NOTE: If you receive an error, please run the specified command in the error and re-run make manifests.
+
+### Troubleshooting
+
+#### Gateway
+
+If you previously ran `Kardinal Manager`, you may already have a `gateway-istio` deployment in your cluster. This could lead to requests being 
+routed through it instead of the `gateway-istio` deployment in the `baseline` namespace. This issue arises because a gateway resource may 
+still exist. We recommend removing it —only if you're certain it was created by Kardinal— before deploying the `./ci/obd-demo.yaml` manifest. 
+You can do this with the following command: `kubectl delete Gateway gateway`
 
 [api-design-doc]: https://book.kubebuilder.io/cronjob-tutorial/api-design
 [rbac-markers-doc]: https://book.kubebuilder.io/reference/markers/rbac
