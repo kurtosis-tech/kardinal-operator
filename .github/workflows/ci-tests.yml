@@ -42,7 +42,11 @@ jobs:
               export PATH=$PWD/bin:$PATH
               istioctl install --set profile=demo -y
           popd
- 
+
+      - name: Install Gateway API
+        run: |
+          kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
+
       - name: Deploy the boutique demo
         run: |
           kubectl create namespace baseline

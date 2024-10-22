@@ -276,7 +276,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: prod.app.localhost
+    - host: web.other.localhost
       http:
         paths:
           - path: /
@@ -286,3 +286,40 @@ spec:
                 name: frontend
                 port:
                   number: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gateway
+  annotations:
+    kardinal.dev.service/gateway: "true"
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: default
+      hostname: "*.app.localhost"
+      port: 8888
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All #OPERATOR-TODO review this value, it could also be 'Same' more info here: https://istio.io/latest/docs/tasks/traffic-management/ingress/ingress-control/
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http
+  annotations:
+    kardinal.dev.service/route: "true"
+spec:
+  parentRefs:
+    - name: gateway
+  hostnames: ["baseline.app.localhost"]
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: frontend
+          port: 80

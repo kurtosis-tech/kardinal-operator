@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kardinalcorev1 "kardinal.dev/kardinal-operator/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 const (
@@ -50,7 +51,7 @@ func NewResourcesFromClient(ctx context.Context, cl client.Client) (*Resources, 
 	}
 
 	namespacePrefixesToIgnore := []string{
-		"default",
+		metav1.NamespaceDefault,
 		"ingress-nginx",
 		"istio",
 		"kube",
@@ -108,6 +109,18 @@ func getNamespaceResources(ctx context.Context, namespace string, cl client.Clie
 		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of destination rules for namespace %s", namespace)
 	}
 
+	gateways := &gateway.GatewayList{}
+	err = cl.List(ctx, gateways, client.InNamespace(namespace))
+	if err != nil {
+		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of gateways for namespace %s", namespace)
+	}
+
+	httpRoutes := &gateway.HTTPRouteList{}
+	err = cl.List(ctx, httpRoutes, client.InNamespace(namespace))
+	if err != nil {
+		return nil, stacktrace.Propagate(err, "An error occurred retrieving the list of HTTP routes for namespace %s", namespace)
+	}
+
 	flows := &kardinalcorev1.FlowList{}
 	err = cl.List(ctx, flows, client.InNamespace(namespace))
 	if err != nil {
@@ -122,6 +135,8 @@ func getNamespaceResources(ctx context.Context, namespace string, cl client.Clie
 		VirtualServices:  virtualServices.Items,
 		DestinationRules: destinationRules.Items,
 		Flows:            lo.Map(flows.Items, func(flow kardinalcorev1.Flow, _ int) *kardinalcorev1.Flow { return &flow }),
+		Gateways:         lo.Map(gateways.Items, func(gateway gateway.Gateway, _ int) *gateway.Gateway { return &gateway }),
+		HTTPRoutes:       lo.Map(httpRoutes.Items, func(route gateway.HTTPRoute, _ int) *gateway.HTTPRoute { return &route }),
 	}, nil
 }
 
@@ -186,6 +201,7 @@ func ApplyResources(
 					}
 				} else {
 					namespaceObjectLabels := namespaceObject.GetLabels()
+					// OPERATOR-TODO we have to check if it was marked for deletion by Kubernetes and handle it that situation
 					isManaged, found := namespaceObjectLabels[kardinalManagedLabelKey]
 					if found && isManaged == trueStr {
 						if !compareObjectsFunc(clusterTopologyNamespaceObject, namespaceObject) {

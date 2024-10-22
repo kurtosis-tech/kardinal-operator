@@ -15,8 +15,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	net "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"kardinal.dev/kardinal-operator/kardinal/resources"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gateway "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 const (
@@ -31,6 +33,7 @@ type ClusterTopology struct {
 	Ingress             *Ingress             `json:"ingress"`
 	Services            []*Service           `json:"services"`
 	ServiceDependencies []*ServiceDependency `json:"serviceDependencies"`
+	GatewayAndRoutes    *GatewayAndRoutes    `json:"gatewayAndRoutes"`
 }
 
 func (clusterTopology *ClusterTopology) Print() {
@@ -206,7 +209,18 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 		}
 	}
 
-	ingresses, frontServices := clusterTopology.GetNetIngresses()
+	frontServices := []*corev1.Service{}
+	// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
+	// routes, frontServices, inboundFrontFilters := clusterTopology.getHttpRoutes()
+	routes, frontServicesFromHttpRoutes := clusterTopology.getHttpRoutes()
+	groupedRoutes := lo.GroupBy(routes, func(routes *gateway.HTTPRoute) string { return routes.Namespace })
+	for namespace, routes := range groupedRoutes {
+		resourceNamespace := resourceNamespaces[namespace]
+		resourceNamespace.HTTPRoutes = append(resourceNamespace.HTTPRoutes, routes...)
+	}
+	frontServices = append(frontServices, frontServicesFromHttpRoutes...)
+
+	ingresses, frontServicesFromIngresses := clusterTopology.GetNetIngresses()
 	groupedIngresses := lo.GroupBy(ingresses, func(ingress *net.Ingress) string {
 		return ingress.Namespace
 	})
@@ -214,9 +228,21 @@ func (clusterTopology *ClusterTopology) GetResources() (*resources.Resources, er
 		resourceNamespace := resourceNamespaces[namespace]
 		resourceNamespace.Ingresses = append(resourceNamespace.Ingresses, ingresses...)
 	}
-	for _, frontService := range frontServices {
+	frontServices = append(frontServices, frontServicesFromIngresses...)
+
+	frontServicesToAdd := lo.UniqBy(frontServices, func(service *corev1.Service) string { return service.GetName() })
+	for _, frontService := range frontServicesToAdd {
 		resourceNamespace := resourceNamespaces[frontService.Namespace]
 		resourceNamespace.Services = append(resourceNamespace.Services, frontService)
+	}
+
+	gateways := clusterTopology.getGateways()
+	groupedGateways := lo.GroupBy(gateways, func(gateway *gateway.Gateway) string {
+		return gateway.Namespace
+	})
+	for namespace, gatewayObj := range groupedGateways {
+		resourceNamespace := resourceNamespaces[namespace]
+		resourceNamespace.Gateways = append(resourceNamespace.Gateways, gatewayObj...)
 	}
 
 	clusterTopologyResources := &resources.Resources{
@@ -322,6 +348,48 @@ func (clusterTopology *ClusterTopology) ApplyResources(ctx context.Context, clus
 		return stacktrace.Propagate(err, "An error occurred applying the ingress resources")
 	}*/
 
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.Gateways, func(gateway *gateway.Gateway, _ int) client.Object { return gateway })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			gateway := namespace.GetGateway(name)
+			if gateway == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			}
+			return gateway
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(&object1.(*gateway.Gateway).Spec, &object2.(*gateway.Gateway).Spec)
+		},
+	)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred applying the gateway resources")
+	}
+
+	err = resources.ApplyResources(
+		ctx, clusterResources, clusterTopologyResources, cl,
+		func(namespace *resources.Namespace) []client.Object {
+			return lo.Map(namespace.HTTPRoutes, func(route *gateway.HTTPRoute, _ int) client.Object { return route })
+		},
+		func(namespace *resources.Namespace, name string) client.Object {
+			route := namespace.GetHTTPRoute(name)
+			if route == nil {
+				// We have to return nil here so the interface returned is nil and not just the underlying object
+				return nil
+			}
+			return route
+		},
+		func(object1 client.Object, object2 client.Object) bool {
+			return reflect.DeepEqual(&object1.(*gateway.HTTPRoute).Spec, &object2.(*gateway.HTTPRoute).Spec)
+		},
+	)
+	if err != nil {
+		return stacktrace.Propagate(err, "An error occurred applying the HTTP route resources")
+	}
+
 	return nil
 }
 
@@ -343,9 +411,11 @@ func (clusterTopology *ClusterTopology) GetGraph() graph.Graph[ServiceHash, *Ser
 }
 
 func (clusterTopology *ClusterTopology) Copy(flowId string) *ClusterTopology {
+	activeFlowIDs := []string{flowId}
 	clusterTopologyCopy := deep.MustCopy(clusterTopology)
 	clusterTopologyCopy.FlowID = flowId
-	clusterTopologyCopy.Ingress.ActiveFlowIDs = []string{flowId}
+	clusterTopologyCopy.Ingress.ActiveFlowIDs = activeFlowIDs
+	clusterTopologyCopy.GatewayAndRoutes.ActiveFlowIDs = activeFlowIDs
 	return clusterTopologyCopy
 }
 
@@ -387,13 +457,17 @@ func (clusterTopology *ClusterTopology) Merge(clusterTopologies []*ClusterTopolo
 		Services:            deep.MustCopy(clusterTopology.Services),
 		ServiceDependencies: deep.MustCopy(clusterTopology.ServiceDependencies),
 		Ingress:             deep.MustCopy(clusterTopology.Ingress),
+		GatewayAndRoutes:    deep.MustCopy(clusterTopology.GatewayAndRoutes),
 	}
 	for _, topology := range clusterTopologies {
 		mergedClusterTopology.Services = append(mergedClusterTopology.Services, topology.Services...)
 		mergedClusterTopology.ServiceDependencies = append(mergedClusterTopology.ServiceDependencies, topology.ServiceDependencies...)
 		mergedClusterTopology.Ingress.ActiveFlowIDs = append(mergedClusterTopology.Ingress.ActiveFlowIDs, topology.Ingress.ActiveFlowIDs...)
+		mergedClusterTopology.GatewayAndRoutes.ActiveFlowIDs = append(mergedClusterTopology.GatewayAndRoutes.ActiveFlowIDs, topology.GatewayAndRoutes.ActiveFlowIDs...)
 	}
 	mergedClusterTopology.Ingress.ActiveFlowIDs = lo.Uniq(mergedClusterTopology.Ingress.ActiveFlowIDs)
+	mergedClusterTopology.GatewayAndRoutes.ActiveFlowIDs = lo.Uniq(mergedClusterTopology.GatewayAndRoutes.ActiveFlowIDs)
+	logrus.Infof("Services length: %d", len(mergedClusterTopology.Services))
 
 	// KARDINAL-TODO improve the filtering method, we could implement the `Service.Equal` method to compare and filter the services and inside this method we could use the k8s service marshall method (https://pkg.go.dev/k8s.io/api/core/v1#Service.Marsha) and also the same for other k8s fields it should be faster
 	mergedClusterTopology.Services = lo.UniqBy(mergedClusterTopology.Services, func(service *Service) ServiceVersion {
@@ -473,11 +547,106 @@ func (clusterTopology *ClusterTopology) GetNetIngresses() ([]*net.Ingress, []*co
 	return ingressList, lo.Values(frontServices)
 }
 
+func (clusterTopology *ClusterTopology) getGateways() []*gateway.Gateway {
+	return lo.Map(clusterTopology.GatewayAndRoutes.Gateways, func(gateway *gateway.Gateway, gwId int) *gateway.Gateway {
+		if gateway.Namespace == "" {
+			gateway.Namespace = metav1.NamespaceDefault
+		}
+		return gateway
+	})
+}
+
+// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
+func (clusterTopology *ClusterTopology) getHttpRoutes() ([]*gateway.HTTPRoute, []*corev1.Service) {
+	routes := []*gateway.HTTPRoute{}
+	frontServices := map[string]*corev1.Service{}
+
+	// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
+	// filters := []istioclient.EnvoyFilter{}
+
+	for _, activeFlowID := range clusterTopology.GatewayAndRoutes.ActiveFlowIDs {
+		logrus.Infof("Setting gateway route for active flow ID: %v", activeFlowID)
+		for routeId, routeOriginal := range clusterTopology.GatewayAndRoutes.GatewayRoutes {
+			namespace := routeOriginal.Namespace
+			routeSpecOriginal := routeOriginal.Spec
+			routeSpec := routeSpecOriginal.DeepCopy()
+
+			routeSpec.Hostnames = lo.Map(routeSpec.Hostnames, func(hostname gateway.Hostname, _ int) gateway.Hostname {
+				return gateway.Hostname(replaceOrAddSubdomain(string(hostname), activeFlowID))
+			})
+
+			for _, rule := range routeSpec.Rules {
+				for refIx, ref := range rule.BackendRefs {
+					originalServiceName := string(ref.Name)
+					target := clusterTopology.GetServiceByVersion(namespace, originalServiceName, activeFlowID)
+					// fallback to baseline if backend not found at the active flow
+					if target == nil {
+						target = clusterTopology.GetBaselineFlowService(namespace, originalServiceName)
+					}
+					if target != nil {
+						idVersion := fmt.Sprintf("%s-%s", target.ServiceID, activeFlowID)
+						_, serviceAlreadyAdded := frontServices[idVersion]
+						if !serviceAlreadyAdded {
+							frontServices[idVersion] = target.GetVersionedService(activeFlowID, namespace)
+							ref.Name = gateway.ObjectName(idVersion)
+							// OPERATOR-TODO creo que tambien el problema es que hay 2 http route para el baseline flow
+							rule.BackendRefs[refIx] = ref
+
+							// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
+							// hostnames := lo.Map(routeSpec.Hostnames, func(item gateway.Hostname, _ int) string { return string(item) })
+
+							// Set Envoy FIlter for the service
+							// filter := &externalInboudFilter{
+							//	filter: generateDynamicLuaScript(allServices, activeFlowID, namespace, hostnames),
+							//	name:   strings.Join(hostnames, "-"),
+							// }
+							// inboundFilter := getInboundFilter(target.ServiceID, namespace, -1, &target.Version, filter)
+							// logrus.Debugf("Adding inbound filter to setup routing table for flow '%s' on service '%s', version '%s'", activeFlowID, target.ServiceID, target.Version)
+							// filters = append(filters, inboundFilter)
+						}
+					} else {
+						logrus.Errorf(">> service not found %v", ref.Name)
+					}
+				}
+			}
+
+			for parentRefIx, parentRef := range routeSpec.ParentRefs {
+				if parentRef.Namespace == nil || string(*parentRef.Namespace) == "" {
+					defaultNS := gateway.Namespace(namespace)
+					parentRef.Namespace = &defaultNS
+				}
+				routeSpec.ParentRefs[parentRefIx] = parentRef
+			}
+
+			route := &gateway.HTTPRoute{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "gateway.networking.k8s.io/v1",
+					Kind:       "HTTPRoute",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("http-route-%d-%s", routeId, activeFlowID),
+					Namespace: namespace,
+					Labels: map[string]string{
+						kardinalManagedLabelKey: trueStr,
+					},
+				},
+				Spec: *routeSpec,
+			}
+			routes = append(routes, route)
+		}
+	}
+
+	// OPERATOR-TODO include []istioclient.EnvoyFilter as the third returned value once we add the envoy filters objects
+	// return routes, lo.Values(frontServices), filters
+	return routes, lo.Values(frontServices)
+}
+
 func NewClusterTopologyFromResources(
 	clusterResources *resources.Resources,
 ) (*ClusterTopology, error) {
 	clusterTopologyServices := []*Service{}
 	clusterTopologyServiceDependencies := []*ServiceDependency{}
+	var clusterTopologyGatewayAndRoutes *GatewayAndRoutes
 	var clusterTopologyIngress *Ingress
 
 	for _, resourceNamespace := range clusterResources.Namespaces {
@@ -485,6 +654,7 @@ func NewClusterTopologyFromResources(
 		if err != nil {
 			return nil, stacktrace.NewError("an error occurred processing the resource services and deployments")
 		}
+		clusterTopologyGatewayAndRoutes = processGatewayAndRouteConfigs(resourceNamespace.Gateways, resourceNamespace.HTTPRoutes)
 		ingress := processIngresses(resourceNamespace.Ingresses)
 		clusterTopologyServices = append(clusterTopologyServices, services...)
 		clusterTopologyServiceDependencies = append(clusterTopologyServiceDependencies, serviceDependencies...)
@@ -497,8 +667,8 @@ func NewClusterTopologyFromResources(
 	}
 
 	// some validations
-	if len(clusterTopologyIngress.Ingresses) == 0 {
-		return nil, stacktrace.NewError("At least one ingress is required")
+	if len(clusterTopologyIngress.Ingresses) == 0 && len(clusterTopologyGatewayAndRoutes.Gateways) == 0 && len(clusterTopologyGatewayAndRoutes.GatewayRoutes) == 0 {
+		return nil, stacktrace.NewError("At least one ingress or gateway is required")
 	}
 	if len(clusterTopologyServices) == 0 {
 		return nil, stacktrace.NewError("At least one service is required in addition to the ingress service(s)")
@@ -508,6 +678,7 @@ func NewClusterTopologyFromResources(
 		Services:            clusterTopologyServices,
 		ServiceDependencies: clusterTopologyServiceDependencies,
 		Ingress:             clusterTopologyIngress,
+		GatewayAndRoutes:    clusterTopologyGatewayAndRoutes,
 	}
 
 	return &clusterTopology, nil
@@ -597,4 +768,39 @@ func processIngresses(ingresses []*net.Ingress) *Ingress {
 		}
 	}
 	return clusterTopologyIngress
+}
+
+func processGatewayAndRouteConfigs(gateways []*gateway.Gateway, routes []*gateway.HTTPRoute) *GatewayAndRoutes {
+	gatewayAndRoutes := &GatewayAndRoutes{
+		ActiveFlowIDs: []string{resources.BaselineNamespace},
+		Gateways:      []*gateway.Gateway{},
+		GatewayRoutes: []*gateway.HTTPRoute{},
+	}
+	for _, gatewayObj := range gateways {
+		gatewayAnnotations := gatewayObj.GetObjectMeta().GetAnnotations()
+		isGateway, ok := gatewayAnnotations["kardinal.dev.service/gateway"]
+		if ok && isGateway == "true" {
+			if gatewayObj.Spec.Listeners == nil {
+				logrus.Warnf("Gateway %v is missing listeners", gatewayObj.Name)
+			} else {
+				for _, listener := range gatewayObj.Spec.Listeners {
+					if listener.Hostname != nil && !strings.HasPrefix(string(*listener.Hostname), "*.") {
+						logrus.Warnf("Gateway %v listener %v is missing a wildcard, creating flow entry points will not work properly.", gatewayObj.Name, listener.Hostname)
+					}
+				}
+			}
+			logrus.Infof("Managing gateway: %v", gatewayObj.Name)
+			gatewayAndRoutes.Gateways = append(gatewayAndRoutes.Gateways, gatewayObj)
+		} else {
+			logrus.Infof("Gateway %v is not a Kardinal gateway", gatewayObj.Name)
+		}
+	}
+	for _, route := range routes {
+		routeAnnotations := route.GetObjectMeta().GetAnnotations()
+		isRoute, ok := routeAnnotations["kardinal.dev.service/route"]
+		if ok && isRoute == "true" {
+			gatewayAndRoutes.GatewayRoutes = append(gatewayAndRoutes.GatewayRoutes, route)
+		}
+	}
+	return gatewayAndRoutes
 }
